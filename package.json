@@ -1,0 +1,30 @@
+{
+  "name": "performance-testing-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted performance testing with Playwright, Xvfb, and noVNC streaming",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node server/index.js",
+    "client": "cd client && npm run dev",
+    "build": "cd client && npm run build",
+    "start": "node server.js",
+    "postinstall": "npm install --prefix client && playwright install chromium"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^143.0.4",
+    "chrome-trace-event": "^1.0.4",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "playwright": "^1.58.1",
+    "react-render-tracker": "^0.7.8",
+    "ws": "^8.18.0",
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
