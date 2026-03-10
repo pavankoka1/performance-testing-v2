@@ -7,12 +7,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY package*.json ./
-COPY client/package*.json ./client/
-
-RUN npm install
-
 COPY . .
+
+# Fresh install in container so native PostCSS/Tailwind bindings build for Linux
+# (avoids "Cannot find native binding" when lockfile was generated on different OS)
+RUN rm -rf node_modules client/node_modules && npm install
 
 RUN npm run build
 
