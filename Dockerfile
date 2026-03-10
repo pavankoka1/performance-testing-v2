@@ -1,4 +1,4 @@
-FROM node:18
+FROM node:20
 
 # VNC deps only - no pip. Playwright installs Chromium deps via --with-deps
 RUN apt-get update \
