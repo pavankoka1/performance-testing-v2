@@ -1,5 +1,12 @@
 import type { PerfReport } from "@/lib/reportTypes";
-import { Activity, Cpu, Layers, Monitor, ShieldCheck } from "lucide-react";
+import {
+  Activity,
+  ChevronDown,
+  Cpu,
+  Layers,
+  Monitor,
+  ShieldCheck,
+} from "lucide-react";
 import { useCallback, useState } from "react";
 import { Toaster, toast } from "react-hot-toast";
 import LiveMetricsPanel from "./LiveMetricsPanel";
@@ -7,6 +14,7 @@ import MetricsGlossary from "./MetricsGlossary";
 import ProcessingLoader from "./ProcessingLoader";
 import RecordButtons from "./RecordButtons";
 import ReportViewer from "./ReportViewer";
+import SystemStatusBanner from "./SystemStatusBanner";
 import URLInput from "./URLInput";
 
 type CpuThrottle = 1 | 4 | 6;
@@ -129,24 +137,33 @@ export default function Dashboard() {
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 sm:py-10">
         <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--glow)]">
           <div className="flex flex-col gap-6">
+            <SystemStatusBanner />
             <URLInput value={url} onChange={setUrl} />
             <div className="flex flex-col gap-2">
               <label className="flex items-center gap-2 text-sm font-medium text-[var(--fg)]">
                 <Cpu className="h-4 w-4 text-[var(--accent)]" />
                 CPU throttling (low-end device simulation)
               </label>
-              <select
-                value={cpuThrottle}
-                onChange={(e) =>
-                  setCpuThrottle(Number(e.target.value) as CpuThrottle)
-                }
-                disabled={isRecording || isProcessing}
-                className="w-full max-w-xs rounded-xl border border-[var(--border)] bg-[var(--bg)] py-2.5 pl-3 pr-8 text-sm text-[var(--fg)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-dim)] disabled:opacity-50"
-              >
-                <option value={1}>1× — No throttling</option>
-                <option value={4}>4× — Slower CPU (e.g. low-end mobile)</option>
-                <option value={6}>6× — Heavier throttle</option>
-              </select>
+              <div className="relative w-full max-w-xs">
+                <select
+                  value={cpuThrottle}
+                  onChange={(e) =>
+                    setCpuThrottle(Number(e.target.value) as CpuThrottle)
+                  }
+                  disabled={isRecording || isProcessing}
+                  className="w-full appearance-none rounded-xl border border-[var(--border)] bg-[var(--bg)] py-2.5 pl-4 pr-11 text-sm text-[var(--fg)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-dim)] focus:outline-none disabled:opacity-50"
+                >
+                  <option value={1}>1× — No throttling</option>
+                  <option value={4}>
+                    4× — Slower CPU (e.g. low-end mobile)
+                  </option>
+                  <option value={6}>6× — Heavier throttle</option>
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--fg-muted)]"
+                />
+              </div>
             </div>
             <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--fg)]">
               <input

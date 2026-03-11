@@ -9,7 +9,135 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { chromium } = require("playwright");
 const yauzl = require("yauzl");
-const { parseTraceToReport } = require("./traceParser");
+const { parseTraceToReport, readTraceFromZip } = require("./traceParser");
+
+const LAYOUT_PROPS = new Set([
+  "width",
+  "height",
+  "top",
+  "left",
+  "right",
+  "bottom",
+  "margin",
+  "padding",
+  "border",
+  "font-size",
+  "display",
+  "position",
+]);
+const PAINT_PROPS = new Set([
+  "color",
+  "background",
+  "box-shadow",
+  "outline",
+  "filter",
+  "border-radius",
+]);
+const SKIP_KEYFRAME_KEYS = new Set([
+  "offset",
+  "easing",
+  "composite",
+  "compositeoperation",
+  "flex",
+  "flexgrow",
+  "flexshrink",
+  "flexbasis",
+]);
+
+function extractAnimationProperties(a, source) {
+  const props = [];
+  if (a.type === "CSSTransition" && source) {
+    const p =
+      source.transitionProperty ?? source.cssProperty ?? source.property;
+    if (typeof p === "string" && !SKIP_KEYFRAME_KEYS.has(p.toLowerCase()))
+      props.push(p.trim());
+    if (Array.isArray(source.transitionProperty)) {
+      for (const x of source.transitionProperty) {
+        if (typeof x === "string" && !SKIP_KEYFRAME_KEYS.has(x.toLowerCase()))
+          props.push(x.trim());
+      }
+    }
+    if (props.length) return props;
+  }
+  const kfRule = source?.keyframesRule;
+  const kfList = kfRule?.keyframes ?? [];
+  for (const kf of kfList) {
+    const style = kf.style ?? kf;
+    if (style && typeof style === "object") {
+      for (const key of Object.keys(style)) {
+        if (!SKIP_KEYFRAME_KEYS.has(key.toLowerCase()) && !props.includes(key))
+          props.push(key);
+      }
+    }
+  }
+  for (const kf of kfList) {
+    if (kf && typeof kf === "object") {
+      for (const key of Object.keys(kf)) {
+        if (!SKIP_KEYFRAME_KEYS.has(key.toLowerCase()) && !props.includes(key))
+          props.push(key);
+      }
+    }
+  }
+  return props.length ? props : undefined;
+}
+
+function extractAnimationName(a, source) {
+  if (typeof a.name === "string" && a.name.trim()) return a.name.trim();
+  const kfName = source?.keyframesRule?.name;
+  if (typeof kfName === "string" && kfName.trim()) return kfName.trim();
+  if (a.type === "CSSTransition" && source) {
+    const p =
+      source.transitionProperty ?? source.cssProperty ?? source.property;
+    if (typeof p === "string" && p.trim()) return `Transition (${p.trim()})`;
+    if (Array.isArray(source.transitionProperty)) {
+      const parts = (source.transitionProperty || [])
+        .filter((x) => typeof x === "string" && x.trim())
+        .map((x) => x.trim());
+      if (parts.length) return `Transition (${parts.join(", ")})`;
+    }
+  }
+  const props = extractAnimationProperties(a, source);
+  if (props?.length && props[0]) {
+    const p = props[0];
+    return (
+      p.charAt(0).toUpperCase() +
+      p.slice(1).replace(/-./g, (m) => m[1].toUpperCase())
+    );
+  }
+  return "";
+}
+
+function inferBottleneck(properties, animationName) {
+  if (properties?.length) {
+    const lower = properties.map((p) => p.toLowerCase());
+    if (
+      lower.some(
+        (p) =>
+          LAYOUT_PROPS.has(p) || p.includes("margin") || p.includes("padding")
+      )
+    )
+      return "layout";
+    if (
+      lower.some(
+        (p) =>
+          PAINT_PROPS.has(p) || p.includes("shadow") || p.includes("background")
+      )
+    )
+      return "paint";
+    if (lower.some((p) => p === "transform" || p === "opacity"))
+      return "compositor";
+  }
+  const name = (animationName ?? "").toLowerCase();
+  if (name.startsWith("cc-")) return "compositor";
+  if (name.startsWith("blink-") || name.includes("style")) return "layout";
+  if (
+    name.includes("fade") ||
+    name.includes("opacity") ||
+    name.includes("transform")
+  )
+    return "compositor";
+  return undefined;
+}
 
 const VNC_ENABLED = process.env.VNC_ENABLED === "true";
 const DISPLAY_NUM = process.env.XVFB_DISPLAY || "99";
@@ -165,6 +293,19 @@ async function ensureClientCollectors(page) {
     const w = window;
     if (w.__perftraceCollector) return;
     const collector = { longTasks: [], cls: 0, fcp: undefined, lcp: undefined };
+    const syncFromPerf = () => {
+      try {
+        const paint = performance.getEntriesByType?.("paint") ?? [];
+        const fcpEntry = paint.find((e) => e.name === "first-contentful-paint");
+        if (fcpEntry) collector.fcp = fcpEntry.startTime;
+      } catch {}
+      try {
+        const lcpEntries =
+          performance.getEntriesByType?.("largest-contentful-paint") ?? [];
+        if (lcpEntries.length)
+          collector.lcp = lcpEntries[lcpEntries.length - 1].startTime;
+      } catch {}
+    };
     try {
       const lo = new PerformanceObserver((list) => {
         for (const e of list.getEntries())
@@ -179,16 +320,20 @@ async function ensureClientCollectors(page) {
       const po = new PerformanceObserver((list) => {
         for (const e of list.getEntries())
           if (e.name === "first-contentful-paint") collector.fcp = e.startTime;
+        syncFromPerf();
       });
       po.observe({ type: "paint", buffered: true });
+      syncFromPerf();
     } catch {}
     try {
-      const lcp = new PerformanceObserver((list) => {
+      const lcpObs = new PerformanceObserver((list) => {
         const entries = list.getEntries();
         if (entries.length)
           collector.lcp = entries[entries.length - 1].startTime;
+        syncFromPerf();
       });
-      lcp.observe({ type: "largest-contentful-paint", buffered: true });
+      lcpObs.observe({ type: "largest-contentful-paint", buffered: true });
+      syncFromPerf();
     } catch {}
     try {
       const cls = new PerformanceObserver((list) => {
@@ -272,7 +417,10 @@ async function ensureAnimationPropertyCollector(page) {
                 )
                   props.push(key);
           }
-          const name = anim.animationName || anim.transitionProperty || "";
+          const name =
+            anim.animationName ||
+            anim.transitionProperty ||
+            (props.length ? props[0] : "");
           const start = Number(anim.startTime) || 0;
           const dur = effect.getComputedTiming?.()?.duration ?? 0;
           const key = `${name}-${Math.round(start)}-${Math.round(dur)}`;
@@ -288,7 +436,7 @@ async function ensureAnimationPropertyCollector(page) {
       } catch {}
     };
     poll();
-    setInterval(poll, 400);
+    setInterval(poll, 800);
   });
 }
 
@@ -331,8 +479,28 @@ async function createCaptureSession(
   });
 
   await metricsCdp.send("Performance.enable");
+  const collectedAnimations = [];
   try {
     await metricsCdp.send("Animation.enable");
+    metricsCdp.on("Animation.animationStarted", (params) => {
+      const a = params?.animation;
+      if (!a || typeof a.id !== "string") return;
+      const source = a.source;
+      const props = extractAnimationProperties(a, source);
+      const duration =
+        typeof source?.duration === "number" ? source.duration : undefined;
+      const delay =
+        typeof source?.delay === "number" ? source.delay : undefined;
+      collectedAnimations.push({
+        id: a.id,
+        name: extractAnimationName(a, source),
+        type: a.type || "WebAnimation",
+        startTimeSec: (Date.now() - recordingStartMs) / 1000,
+        durationMs: duration != null ? duration : undefined,
+        delayMs: delay != null ? delay : undefined,
+        properties: props,
+      });
+    });
   } catch {}
   if (cpuThrottle > 1) {
     try {
@@ -486,6 +654,7 @@ async function createCaptureSession(
     sampleInterval,
     cpuThrottle,
     rrtClient,
+    collectedAnimations,
   };
 
   const baseUrl =
@@ -503,13 +672,25 @@ async function createCaptureSession(
 }
 
 async function stopCaptureSession() {
-  if (!activeSession) throw new Error("No active session to stop.");
+  if (!activeSession) {
+    const fallback = buildFallbackReport(Date.now() - 60000, Date.now(), {
+      samples: [],
+      fpsSamples: [],
+      networkRequests: [],
+      clientCollector: null,
+    });
+    fallback.suggestions.push({
+      title: "No active session",
+      detail: "No recording was in progress. Start a session first.",
+      severity: "info",
+    });
+    return fallback;
+  }
 
   const {
     browser,
     context,
     page,
-    traceCdp,
     tracePath,
     startedAt,
     samples,
@@ -517,6 +698,7 @@ async function stopCaptureSession() {
     networkRequests,
     sampleInterval,
     rrtClient,
+    collectedAnimations = [],
   } = activeSession;
   activeSession = null;
 
@@ -529,10 +711,25 @@ async function stopCaptureSession() {
   fpsSamples.push(...pageFps);
 
   let clientCollector = null;
+  let clientAnimationProps = [];
   try {
-    clientCollector = await page.evaluate(
-      () => window.__perftraceCollector ?? null
-    );
+    clientCollector = await page.evaluate(() => {
+      const c = window.__perftraceCollector ?? null;
+      if (!c) return null;
+      try {
+        const paint = performance.getEntriesByType?.("paint") ?? [];
+        const fcp = paint.find((e) => e.name === "first-contentful-paint");
+        if (fcp) c.fcp = fcp.startTime;
+      } catch {}
+      try {
+        const lcp =
+          performance.getEntriesByType?.("largest-contentful-paint") ?? [];
+        if (lcp.length) c.lcp = lcp[lcp.length - 1].startTime;
+      } catch {}
+      return c;
+    });
+    clientAnimationProps =
+      (await page.evaluate(() => window.__perftraceAnimationProps ?? [])) || [];
   } catch {}
 
   let reactRerenderHint = null;
@@ -579,52 +776,43 @@ async function stopCaptureSession() {
   }
 
   const stopRequestedAt = Date.now();
-  let traceText = "";
-  try {
-    await context.tracing.stop({ path: tracePath });
-    const streamHandle = await new Promise((resolve, reject) => {
-      const onComplete = (p) => {
-        traceCdp.off("Tracing.tracingComplete", onComplete);
-        resolve(p.stream ?? "");
-      };
-      traceCdp.on("Tracing.tracingComplete", onComplete);
-      traceCdp.send("Tracing.end").catch((err) => {
-        traceCdp.off("Tracing.tracingComplete", onComplete);
-        reject(err);
-      });
-    });
-    while (true) {
-      const chunk = await traceCdp.send("IO.read", { handle: streamHandle });
-      traceText += chunk.data;
-      if (chunk.eof) break;
-    }
-    await traceCdp.send("IO.close", { handle: streamHandle });
-  } finally {
-    const candidates = [];
-    const pageVideo = page.video();
-    if (pageVideo) {
+
+  // Stop tracing (writes to tracePath) and close context immediately so the video
+  // stops recording at the moment the user clicked stop. Trace parsing happens after.
+  await context.tracing.stop({ path: tracePath });
+
+  const candidates = [];
+  const pageVideo = page.video();
+  if (pageVideo) {
+    try {
+      const fp = await pageVideo.path();
+      const st = await fs.stat(fp);
+      candidates.push({ path: fp, size: st.size });
+    } catch {}
+  }
+  for (const p of context.pages()) {
+    const v = p.video();
+    if (v && v !== pageVideo) {
       try {
-        const fp = await pageVideo.path();
+        const fp = await v.path();
         const st = await fs.stat(fp);
         candidates.push({ path: fp, size: st.size });
       } catch {}
     }
-    for (const p of context.pages()) {
-      const v = p.video();
-      if (v && v !== pageVideo) {
-        try {
-          const fp = await v.path();
-          const st = await fs.stat(fp);
-          candidates.push({ path: fp, size: st.size });
-        } catch {}
-      }
-    }
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => b.size - a.size);
-      lastVideoPath = candidates[0].path;
-    }
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+  }
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => b.size - a.size);
+    lastVideoPath = candidates[0].path;
+  }
+
+  await context.close().catch(() => {});
+  await browser.close().catch(() => {});
+
+  let traceText = "";
+  try {
+    traceText = await readTraceFromZip(tracePath);
+  } catch (err) {
+    console.warn("[PerfTrace] readTraceFromZip failed:", err?.message || err);
   }
 
   let report;
@@ -658,6 +846,55 @@ async function stopCaptureSession() {
       reactRerenders: reactRerenderHint,
     };
   }
+  const clientAnims = (clientAnimationProps || []).map((a) => {
+    const propName =
+      a.properties?.length && a.properties[0]
+        ? a.properties[0].charAt(0).toUpperCase() +
+          a.properties[0].slice(1).replace(/-./g, (m) => m[1].toUpperCase())
+        : "";
+    return {
+      id: (a.name || propName) + "-" + (a.startTime ?? 0),
+      name: a.name || propName || "(unnamed)",
+      type: "CSSAnimation",
+      startTimeSec: (a.startTime ?? 0) / 1000,
+      durationMs: a.duration ?? 0,
+      properties: a.properties ?? [],
+      bottleneckHint: inferBottleneck(a.properties, a.name || propName),
+    };
+  });
+  const cdpAnims = (collectedAnimations || []).map((a) => {
+    const cdpPropName =
+      a.properties?.length && a.properties[0]
+        ? a.properties[0].charAt(0).toUpperCase() +
+          a.properties[0].slice(1).replace(/-./g, (m) => m[1].toUpperCase())
+        : "";
+    return {
+      id: a.id,
+      name: a.name || cdpPropName || "(unnamed)",
+      type: a.type || "WebAnimation",
+      startTimeSec: a.startTimeSec ?? 0,
+      durationMs: a.durationMs,
+      properties: a.properties ?? [],
+      bottleneckHint: inferBottleneck(a.properties, a.name || cdpPropName),
+    };
+  });
+  const allAnims = [...clientAnims];
+  for (const c of cdpAnims) {
+    const dup = allAnims.some(
+      (x) =>
+        Math.abs(x.startTimeSec - c.startTimeSec) < 0.5 &&
+        (x.name === c.name ||
+          (x.properties?.length &&
+            c.properties?.length &&
+            x.properties[0] === c.properties[0]))
+    );
+    if (!dup) allAnims.push(c);
+  }
+  report.animationMetrics = {
+    ...report.animationMetrics,
+    animations: allAnims,
+    totalAnimations: allAnims.length,
+  };
   await fs.unlink(tracePath).catch(() => {});
 
   return report;

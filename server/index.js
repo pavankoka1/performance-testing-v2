@@ -8,6 +8,7 @@ const {
   getLiveMetrics,
   getLatestVideo,
 } = require("./lib/capture");
+const { getSystemStatus } = require("./lib/systemStatus");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -55,6 +56,18 @@ app.post("/api/stop", async (req, res) => {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to stop recording.";
+    return res.status(500).json({ error: message });
+  }
+});
+
+// API: System status (machine CPU, memory) — high load affects metrics accuracy
+app.get("/api/system-status", async (req, res) => {
+  try {
+    const status = await getSystemStatus();
+    return res.json(status);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to get system status.";
     return res.status(500).json({ error: message });
   }
 });

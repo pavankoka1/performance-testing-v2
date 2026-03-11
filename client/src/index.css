@@ -2,15 +2,17 @@
 
 :root {
   color-scheme: dark;
-  --bg: #0c0c0f;
-  --bg-card: #141418;
-  --bg-elevated: #1a1a1f;
-  --fg: #f4f4f5;
+  --bg: #08080b;
+  --bg-card: #111114;
+  --bg-elevated: #18181c;
+  --fg: #fafafa;
   --fg-muted: #a1a1aa;
   --accent: #8b5cf6;
   --accent-dim: rgba(139, 92, 246, 0.15);
-  --border: rgba(255, 255, 255, 0.08);
-  --glow: 0 0 32px rgba(139, 92, 246, 0.18);
+  --border: rgba(255, 255, 255, 0.06);
+  --glow: 0 0 40px rgba(139, 92, 246, 0.12);
+  --radius: 12px;
+  --radius-lg: 16px;
 }
 
 * {
@@ -24,8 +26,33 @@ body {
 }
 
 .text-gradient {
-  background: linear-gradient(135deg, #6d28d9 0%, #a78bfa 50%, #8b5cf6 100%);
+  background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 45%, #c4b5fd 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.animate-fade-in-delay-1 {
+  animation-delay: 0.05s;
+}
+.animate-fade-in-delay-2 {
+  animation-delay: 0.1s;
+}
+.animate-fade-in-delay-3 {
+  animation-delay: 0.15s;
 }

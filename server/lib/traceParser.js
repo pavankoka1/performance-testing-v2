@@ -18,15 +18,27 @@ const SCRIPT_EVENT_NAMES = new Set([
   "V8.Compile",
   "FunctionCall",
 ]);
-const RASTER_EVENT_NAMES = new Set(["Rasterize", "RasterTask", "GPUTask"]);
-const COMPOSITE_EVENT_NAMES = new Set(["CompositeLayers", "UpdateLayerTree"]);
+const RASTER_EVENT_NAMES = new Set([
+  "Rasterize",
+  "RasterTask",
+  "GPUTask",
+  "GPURasterization",
+  "RasterizerTask",
+  "DisplayItemList",
+]);
+const COMPOSITE_EVENT_NAMES = new Set([
+  "CompositeLayers",
+  "UpdateLayerTree",
+  "BeginMainFrame",
+  "Commit",
+]);
 const LAYOUT_EVENT_NAMES = new Set(["Layout", "UpdateLayoutTree"]);
 const PAINT_EVENT_NAMES = new Set(["Paint", "PaintImage"]);
 
 function parseTraceEvents(traceText) {
   try {
     const parsed = JSON.parse(traceText);
-    return Array.isArray(parsed) ? parsed : parsed.traceEvents ?? [];
+    return Array.isArray(parsed) ? parsed : (parsed.traceEvents ?? []);
   } catch {
     const lines = traceText
       .split(/\r?\n/)
@@ -251,18 +263,30 @@ function parseTraceToReport(
 
   // GPU: ms per second -> percentage (0-100). Value is total ms in that second.
   const toGpuPercent = (ms) => Math.min(100, Math.max(0, (ms / 1000) * 100));
-  const gpuPoints = mapToSeries(gpuBusyMap, "GPU", "%").points;
-  const gpuSeries =
-    gpuPoints.length > 0
-      ? {
-          label: "GPU",
-          unit: "%",
-          points: gpuPoints.map((p) => ({
-            ...p,
-            value: toGpuPercent(p.value),
-          })),
-        }
-      : { label: "GPU", unit: "%", points: [] };
+  let gpuPoints = mapToSeries(gpuBusyMap, "GPU", "%").points;
+  let gpuFromFallback = false;
+  if (gpuPoints.length === 0 && wallClockDurationSec > 0) {
+    const totalGpuMs = rasterMs + compositeMs;
+    const avgGpuPct = Math.min(
+      100,
+      totalGpuMs > 0 ? (totalGpuMs / wallClockDurationMs) * 100 : 0
+    );
+    const steps = Math.max(2, Math.floor(wallClockDurationSec));
+    const step = wallClockDurationSec / steps;
+    gpuPoints = [];
+    for (let i = 0; i <= steps; i++) {
+      gpuPoints.push({ timeSec: i * step, value: avgGpuPct });
+    }
+    gpuFromFallback = true;
+  }
+  const gpuSeries = {
+    label: "GPU",
+    unit: "%",
+    points: gpuPoints.map((p) => ({
+      ...p,
+      value: gpuFromFallback ? p.value : toGpuPercent(p.value),
+    })),
+  };
 
   const memorySeries =
     memoryPoints.length > 0

@@ -9,6 +9,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
+import AnimationTimeline from "./AnimationTimeline";
 import GraphModal from "./GraphModal";
 import MetricChart from "./MetricChart";
 import ReactRerendersSection from "./ReactRerendersSection";
@@ -19,6 +20,7 @@ type GraphModalState = {
   title: string;
   unit: string;
   data: PerfReport["fpsSeries"]["points"];
+  report: PerfReport;
 } | null;
 
 const formatNumber = (value: number) =>
@@ -61,14 +63,20 @@ function ReportViewer({ report }: ReportViewerProps) {
 
   if (!report) {
     return (
-      <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]/80 p-8 text-center text-sm text-[var(--fg-muted)]">
-        Run a session to generate a performance report.
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]/80 p-12 text-center">
+        <p className="text-sm text-[var(--fg-muted)]">
+          Run a session to generate a performance report.
+        </p>
+        <p className="mt-2 text-xs text-[var(--fg-muted)]/70">
+          Paste a URL, click Start, interact with the page, then Stop to see
+          metrics.
+        </p>
       </section>
     );
   }
 
   return (
-    <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6">
+    <section className="animate-fade-in rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--glow)]">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-[var(--fg)]">
@@ -116,6 +124,7 @@ function ReportViewer({ report }: ReportViewerProps) {
               title: "FPS over time",
               unit: "fps",
               data: report.fpsSeries.points,
+              report,
             })
           }
         />
@@ -130,6 +139,7 @@ function ReportViewer({ report }: ReportViewerProps) {
               title: "CPU utilisation",
               unit: "%",
               data: report.cpuSeries.points,
+              report,
             })
           }
         />
@@ -144,6 +154,7 @@ function ReportViewer({ report }: ReportViewerProps) {
               title: "GPU utilisation",
               unit: "%",
               data: report.gpuSeries.points,
+              report,
             })
           }
         />
@@ -157,6 +168,7 @@ function ReportViewer({ report }: ReportViewerProps) {
               title: "JS heap",
               unit: "MB",
               data: report.memorySeries.points,
+              report,
             })
           }
         />
@@ -170,6 +182,7 @@ function ReportViewer({ report }: ReportViewerProps) {
               title: "DOM nodes",
               unit: "count",
               data: report.domNodesSeries.points,
+              report,
             })
           }
         />
@@ -197,10 +210,24 @@ function ReportViewer({ report }: ReportViewerProps) {
               data:
                 report.animationMetrics?.animationFrameEventsPerSec?.points ??
                 [],
+              report,
             })
           }
         />
       </div>
+
+      {(report.animationMetrics?.animations?.length ?? 0) > 0 && (
+        <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
+          <h3 className="mb-4 text-sm font-semibold text-[var(--fg)]">
+            Animations & properties — timeline
+          </h3>
+          <AnimationTimeline
+            animations={report.animationMetrics.animations}
+            durationSec={durationSec}
+            formatNumber={formatNumber}
+          />
+        </div>
+      )}
 
       <div className="mt-8 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
@@ -252,6 +279,12 @@ function ReportViewer({ report }: ReportViewerProps) {
             Web Vitals
           </div>
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
+            {report.webVitals.fcpMs != null && (
+              <p>FCP: {formatNumber(report.webVitals.fcpMs)}ms</p>
+            )}
+            {report.webVitals.lcpMs != null && (
+              <p>LCP: {formatNumber(report.webVitals.lcpMs)}ms</p>
+            )}
             <p>TBT: {formatNumber(report.webVitals.tbtMs)}ms</p>
             <p>Long tasks: {report.webVitals.longTaskCount}</p>
             {report.webVitals.cls != null && (
@@ -274,22 +307,22 @@ function ReportViewer({ report }: ReportViewerProps) {
         </div>
       )}
 
-      {report.suggestions.length > 0 && (
+      {(report.suggestions?.length ?? 0) > 0 && (
         <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
             <ListChecks className="h-4 w-4 text-[var(--accent)]" />
             Suggestions
           </div>
           <ul className="space-y-2 text-sm">
-            {report.suggestions.map((s, i) => (
+            {(report.suggestions ?? []).map((s, i) => (
               <li key={i} className="flex items-start gap-2">
                 <span
                   className={`rounded px-2 py-0.5 text-xs ${
                     s.severity === "critical"
                       ? "bg-rose-500/30 text-rose-400"
                       : s.severity === "warning"
-                      ? "bg-amber-500/30 text-amber-400"
-                      : "bg-blue-500/30 text-blue-400"
+                        ? "bg-amber-500/30 text-amber-400"
+                        : "bg-blue-500/30 text-blue-400"
                   }`}
                 >
                   {s.severity}
@@ -309,11 +342,25 @@ function ReportViewer({ report }: ReportViewerProps) {
           <h3 className="mb-3 text-sm font-semibold text-[var(--fg)]">
             Session recording
           </h3>
+          <p className="mb-2 text-xs text-[var(--fg-muted)]">
+            Recording duration: {durationSec.toFixed(1)}s (playback constrained)
+          </p>
           <video
             ref={videoRef}
             src={report.video.url}
             controls
             className="max-h-96 w-full rounded-xl border border-[var(--border)]"
+            onTimeUpdate={(e) => {
+              const v = e.currentTarget;
+              if (v.currentTime >= durationSec - 0.1) {
+                v.pause();
+                v.currentTime = Math.min(v.currentTime, durationSec);
+              }
+            }}
+            onSeeked={(e) => {
+              const v = e.currentTarget;
+              if (v.currentTime > durationSec) v.currentTime = durationSec;
+            }}
           />
         </div>
       )}
@@ -323,6 +370,7 @@ function ReportViewer({ report }: ReportViewerProps) {
           title={graphModal.title}
           unit={graphModal.unit}
           data={graphModal.data}
+          report={graphModal.report}
           onClose={() => setGraphModal(null)}
         />
       )}

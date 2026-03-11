@@ -37,7 +37,7 @@ function LiveMetricsPanel({ isRecording }: { isRecording: boolean }) {
       }
     };
     poll();
-    intervalRef.current = setInterval(poll, 1500);
+    intervalRef.current = setInterval(poll, 2000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
@@ -93,6 +93,12 @@ function LiveMetricsPanel({ isRecording }: { isRecording: boolean }) {
           </div>
         </div>
       </div>
+      {metrics.cpuPercent != null && metrics.cpuPercent >= 80 && (
+        <p className="mt-3 rounded-lg bg-amber-500/20 px-3 py-2 text-xs text-amber-300">
+          High CPU usage ({formatNum(metrics.cpuPercent)}%) — may affect
+          recording accuracy. Consider closing other apps.
+        </p>
+      )}
     </div>
   );
 }

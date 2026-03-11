@@ -47,7 +47,7 @@ export default function MetricChart({
   const isEmpty = !chartData.length || chartData.every((d) => d.value === 0);
 
   return (
-    <div className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
+    <div className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4 transition-all duration-200 hover:border-[var(--accent)]/25 hover:shadow-[0_0_20px_rgba(139,92,246,0.08)]">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-[var(--fg)]">{title}</h3>
         <div className="flex items-center gap-2">
@@ -77,7 +77,10 @@ export default function MetricChart({
         ) : (
           <ResponsiveContainer width="100%" height="100%" minHeight={160}>
             {type === "bar" ? (
-              <BarChart data={chartData}>
+              <BarChart
+                data={chartData}
+                margin={{ top: 20, right: 20, bottom: 8, left: 8 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="time" stroke="var(--fg-muted)" />
                 <YAxis stroke="var(--fg-muted)" />
@@ -94,7 +97,10 @@ export default function MetricChart({
                 />
               </BarChart>
             ) : (
-              <LineChart data={chartData} margin={{ right: 8 }}>
+              <LineChart
+                data={chartData}
+                margin={{ top: 20, right: 20, bottom: 8, left: 8 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis
                   dataKey={durationSec != null ? "timeSec" : "time"}
@@ -107,7 +113,13 @@ export default function MetricChart({
                   }
                   stroke="var(--fg-muted)"
                 />
-                <YAxis stroke="var(--fg-muted)" domain={yDomain} />
+                <YAxis
+                  stroke="var(--fg-muted)"
+                  domain={yDomain ? [yDomain[0], yDomain[1]] : undefined}
+                  tickFormatter={
+                    unit === "%" ? (v: number) => `${v}%` : undefined
+                  }
+                />
                 <Tooltip
                   contentStyle={{
                     background: "var(--bg-elevated)",

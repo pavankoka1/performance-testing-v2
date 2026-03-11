@@ -18,7 +18,7 @@ const escapeHtml = (s: string) =>
     .replace(/"/g, "&quot;");
 
 export function buildReportHtml(report: PerfReport): string {
-  const suggestionRows = report.suggestions
+  const suggestionRows = (report.suggestions ?? [])
     .map(
       (s) =>
         `<tr><td><span class="badge badge-${s.severity}">${
