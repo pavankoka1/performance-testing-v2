@@ -120,14 +120,31 @@ This builds the client, starts the Express server, and opens the app in an Elect
 ### Package for distribution
 
 ```bash
+# Default: current platform (on M4 Mac → darwin/arm64)
 npm run electron:make
+
+# macOS universal (Intel + Apple Silicon in one .dmg)
+npm run electron:make:mac
+
+# Windows x64
+npm run electron:make:win
+
+# Linux x64
+npm run electron:make:linux
+
+# All platforms (macOS universal + Windows + Linux)
+npm run electron:make:all
 ```
 
-Creates installers in `out/make/`:
+Output in `out/make/`:
 
-- **Windows**: `.exe` (Squirrel) or `.zip` (portable)
-- **macOS**: `.dmg` or `.zip`
-- **Linux**: `.deb` or `.zip`
+- **macOS**: `PerfTrace-x.x.x-universal.dmg` + `.zip` (works on Intel & M1/M2/M3/M4)
+- **Windows**: `PerfTrace-x.x.x-win32-x64.zip` (extract and run `PerfTrace.exe`)
+- **Linux**: `PerfTrace-x.x.x-linux-x64.zip` (extract and run `PerfTrace`)
+
+All builds work from macOS without Mono, Wine, or Linux packaging tools.
+
+**M4 / Apple Silicon**: Your Mac is arm64. The `arm64.dmg` or `universal.dmg` both run natively. If macOS blocks the app ("unidentified developer"), right-click → Open.
 
 Share the packaged app via GitHub Releases, company intranet, or USB. Users install and run locally—no internet required.
 

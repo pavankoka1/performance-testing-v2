@@ -13,6 +13,10 @@
     "electron": "npm run build && electron-forge start",
     "electron:package": "npm run build && electron-forge package",
     "electron:make": "npm run build && electron-forge make",
+    "electron:make:mac": "npm run build && electron-forge make --platform darwin --arch universal",
+    "electron:make:win": "npm run build && electron-forge make --platform win32 --arch x64",
+    "electron:make:linux": "npm run build && electron-forge make --platform linux --arch x64",
+    "electron:make:all": "npm run build && electron-forge make -p darwin -a universal && electron-forge make -p win32 -a x64 && electron-forge make -p linux -a x64",
     "postinstall": "npm install --prefix client && playwright install chromium"
   },
   "dependencies": {
@@ -27,9 +31,7 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.6.0",
-    "@electron-forge/maker-deb": "^7.6.0",
     "@electron-forge/maker-dmg": "^7.6.0",
-    "@electron-forge/maker-squirrel": "^7.6.0",
     "@electron-forge/maker-zip": "^7.6.0",
     "concurrently": "^9.0.1",
     "electron": "^33.2.0"
@@ -53,12 +55,6 @@
       },
       "makers": [
         {
-          "name": "@electron-forge/maker-squirrel",
-          "config": {
-            "name": "PerfTrace"
-          }
-        },
-        {
           "name": "@electron-forge/maker-zip",
           "platforms": [
             "darwin",
@@ -68,10 +64,6 @@
         },
         {
           "name": "@electron-forge/maker-dmg",
-          "config": {}
-        },
-        {
-          "name": "@electron-forge/maker-deb",
           "config": {}
         }
       ]
