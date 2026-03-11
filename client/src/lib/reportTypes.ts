@@ -39,6 +39,8 @@ export type PerfReport = {
   startedAt: string;
   stoppedAt: string;
   durationMs: number;
+  /** URL that was recorded (when available) */
+  recordedUrl?: string | null;
   fpsSeries: MetricSeries;
   cpuSeries: MetricSeries;
   gpuSeries: MetricSeries;
@@ -53,7 +55,12 @@ export type PerfReport = {
   longTasks: {
     count: number;
     totalTimeMs: number;
-    topTasks: Array<{ name: string; durationMs: number; startSec: number }>;
+    topTasks: Array<{
+      name: string;
+      durationMs: number;
+      startSec: number;
+      attribution?: string;
+    }>;
   };
   networkSummary: {
     requests: number;
@@ -95,6 +102,8 @@ export type PerfReport = {
     longTaskTotalMs: number;
   };
   spikeFrames: Array<{ timeSec: number; fps: number; imageDataUrl: string }>;
+  /** True when GPU data came from raster+composite fallback, not real GPU trace events */
+  gpuEstimated?: boolean;
   sessionFrames?: Array<{
     timeSec: number;
     imageDataUrl: string;

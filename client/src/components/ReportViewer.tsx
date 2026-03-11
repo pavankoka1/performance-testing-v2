@@ -89,6 +89,19 @@ function ReportViewer({ report }: ReportViewerProps) {
               ({(report.durationMs / 1000).toFixed(1)}s full session)
             </span>
           </p>
+          {report.recordedUrl && (
+            <p className="mt-1 text-xs text-[var(--fg-muted)]">
+              URL:{" "}
+              <a
+                href={report.recordedUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--accent)] hover:underline truncate max-w-md inline-block"
+              >
+                {report.recordedUrl}
+              </a>
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--fg-muted)]">
           <button
@@ -149,6 +162,9 @@ function ReportViewer({ report }: ReportViewerProps) {
           data={report.gpuSeries.points}
           durationSec={durationSec}
           yDomain={[0, 100]}
+          subtitle={
+            report.gpuEstimated ? "Estimated from raster+composite" : undefined
+          }
           onOpenModal={() =>
             setGraphModal({
               title: "GPU utilisation",
@@ -270,6 +286,21 @@ function ReportViewer({ report }: ReportViewerProps) {
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
             <p>Count: {report.longTasks.count}</p>
             <p>Total: {formatNumber(report.longTasks.totalTimeMs)}ms</p>
+            {report.longTasks.topTasks.length > 0 && (
+              <ul className="mt-2 space-y-1 text-xs">
+                {report.longTasks.topTasks.map((t, i) => (
+                  <li key={i}>
+                    {formatNumber(t.durationMs)}ms @ {t.startSec.toFixed(1)}s
+                    {t.attribution && t.attribution !== "RunTask" && (
+                      <span className="text-[var(--fg)]">
+                        {" "}
+                        — {t.attribution}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 

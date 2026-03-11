@@ -9,7 +9,11 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { chromium } = require("playwright");
 const yauzl = require("yauzl");
-const { parseTraceToReport, readTraceFromZip } = require("./traceParser");
+const {
+  parseTraceToReport,
+  readTraceFromZip,
+  computeClsFromEntries,
+} = require("./traceParser");
 
 const LAYOUT_PROPS = new Set([
   "width",
@@ -292,7 +296,13 @@ async function ensureClientCollectors(page) {
   await page.addInitScript(() => {
     const w = window;
     if (w.__perftraceCollector) return;
-    const collector = { longTasks: [], cls: 0, fcp: undefined, lcp: undefined };
+    const collector = {
+      longTasks: [],
+      cls: 0,
+      layoutShiftEntries: [],
+      fcp: undefined,
+      lcp: undefined,
+    };
     const syncFromPerf = () => {
       try {
         const paint = performance.getEntriesByType?.("paint") ?? [];
@@ -336,14 +346,16 @@ async function ensureClientCollectors(page) {
       syncFromPerf();
     } catch {}
     try {
-      const cls = new PerformanceObserver((list) => {
+      const clsObs = new PerformanceObserver((list) => {
         for (const e of list.getEntries()) {
-          const c = e;
-          if (!c.hadRecentInput && typeof c.value === "number")
-            collector.cls += c.value;
+          if (!e.hadRecentInput && typeof e.value === "number")
+            collector.layoutShiftEntries.push({
+              startTime: e.startTime,
+              value: e.value,
+            });
         }
       });
-      cls.observe({ type: "layout-shift", buffered: true });
+      clsObs.observe({ type: "layout-shift", buffered: true });
     } catch {}
     w.__perftraceCollector = collector;
   });
@@ -512,13 +524,18 @@ async function createCaptureSession(
   await traceCdp.send("Tracing.start", {
     categories: [
       "devtools.timeline",
+      "disabled-by-default-devtools.timeline",
       "disabled-by-default-devtools.timeline.frame",
       "disabled-by-default-devtools.timeline.paint",
       "disabled-by-default-devtools.timeline.layers",
       "disabled-by-default-devtools.timeline.stack",
       "blink.user_timing",
+      "blink.resource",
       "v8",
       "gpu",
+      "cc",
+      "latencyInfo",
+      "disabled-by-default-gpu.service",
     ].join(","),
     transferMode: "ReturnAsStream",
   });
@@ -621,7 +638,7 @@ async function createCaptureSession(
           )
         : 0;
       lastPerfTotals = totals;
-      const SAMPLE_WINDOW_MS = 2000;
+      const SAMPLE_WINDOW_MS = 1000;
       const cpuPercent = Math.min(
         100,
         Math.max(0, (deltaTask / SAMPLE_WINDOW_MS) * 100)
@@ -638,7 +655,7 @@ async function createCaptureSession(
         nodes: totals.nodes || undefined,
       });
     } catch {}
-  }, 2000);
+  }, 1000);
 
   activeSession = {
     browser,
@@ -648,6 +665,7 @@ async function createCaptureSession(
     metricsCdp,
     tracePath,
     startedAt: recordingStartMs,
+    recordedUrl: safeUrl,
     samples,
     fpsSamples,
     networkRequests,
@@ -693,6 +711,7 @@ async function stopCaptureSession() {
     page,
     tracePath,
     startedAt,
+    recordedUrl = null,
     samples,
     fpsSamples,
     networkRequests,
@@ -840,6 +859,7 @@ async function stopCaptureSession() {
   }
 
   report.video = lastVideoPath ? { url: "/api/video", format: "webm" } : null;
+  report.recordedUrl = recordedUrl ?? null;
   if (reactRerenderHint) {
     report.developerHints = {
       ...report.developerHints,
@@ -930,7 +950,7 @@ function buildFallbackReport(startedAt, stoppedAt, fallback) {
       unit: "%",
       points: samples.map((s) => ({
         timeSec: s.timeSec,
-        value: Math.min(100, Math.max(0, (s.cpuBusyMs / 2000) * 100)),
+        value: Math.min(100, Math.max(0, (s.cpuBusyMs / 1000) * 100)),
       })),
     },
     gpuSeries: { label: "GPU", unit: "%", points: [] },
@@ -980,7 +1000,10 @@ function buildFallbackReport(startedAt, stoppedAt, fallback) {
     webVitals: {
       fcpMs: clientCollector?.fcp,
       lcpMs: clientCollector?.lcp,
-      cls: clientCollector?.cls,
+      cls:
+        clientCollector?.layoutShiftEntries != null
+          ? computeClsFromEntries(clientCollector.layoutShiftEntries)
+          : (clientCollector?.cls ?? 0),
       tbtMs: tbt,
       longTaskCount: clientCollector?.longTasks?.length ?? 0,
       longTaskTotalMs:
@@ -989,6 +1012,7 @@ function buildFallbackReport(startedAt, stoppedAt, fallback) {
     spikeFrames: [],
     video: null,
     suggestions: [],
+    gpuEstimated: true,
   };
 }
 
@@ -1010,7 +1034,7 @@ async function getLiveMetrics() {
   const cpuPercent =
     last?.cpuPercent ??
     (last?.cpuBusyMs != null
-      ? Math.min(100, Math.max(0, (last.cpuBusyMs / 2000) * 100))
+      ? Math.min(100, Math.max(0, (last.cpuBusyMs / 1000) * 100))
       : null);
   return {
     recording: true,

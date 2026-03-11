@@ -20,6 +20,8 @@ type MetricChartProps = {
   durationSec?: number;
   onOpenModal?: () => void;
   yDomain?: [number, number];
+  /** Optional subtitle, e.g. "(estimated from raster+composite)" */
+  subtitle?: string;
 };
 
 const formatValue = (value: number) =>
@@ -34,6 +36,7 @@ export default function MetricChart({
   durationSec,
   onOpenModal,
   yDomain,
+  subtitle,
 }: MetricChartProps) {
   const chartData = data.map((point, i) => ({
     id: i,
@@ -49,7 +52,12 @@ export default function MetricChart({
   return (
     <div className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4 transition-all duration-200 hover:border-[var(--accent)]/25 hover:shadow-[0_0_20px_rgba(139,92,246,0.08)]">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[var(--fg)]">{title}</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--fg)]">{title}</h3>
+          {subtitle && (
+            <p className="mt-0.5 text-xs text-[var(--fg-muted)]">{subtitle}</p>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {onOpenModal && (
             <button

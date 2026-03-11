@@ -5,12 +5,9 @@
 const fs = require("fs/promises");
 const yauzl = require("yauzl");
 
-const FRAME_EVENT_NAMES = new Set([
-  "DrawFrame",
-  "BeginFrame",
-  "SwapBuffers",
-  "CompositeLayers",
-]);
+// Use DrawFrame only — BeginFrame fires even for dropped frames (overcounts FPS).
+// SwapBuffers can have multiple per visual frame. DrawFrame = actual drawn frame.
+const FRAME_EVENT_NAMES = new Set(["DrawFrame"]);
 const SCRIPT_EVENT_NAMES = new Set([
   "EvaluateScript",
   "V8.Execute",
@@ -34,6 +31,34 @@ const COMPOSITE_EVENT_NAMES = new Set([
 ]);
 const LAYOUT_EVENT_NAMES = new Set(["Layout", "UpdateLayoutTree"]);
 const PAINT_EVENT_NAMES = new Set(["Paint", "PaintImage"]);
+
+/**
+ * CLS per spec: session window algorithm.
+ * Group shifts with <= 1s gap; max session window 5s; report largest session sum.
+ */
+function computeClsFromEntries(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return 0;
+  const sorted = [...entries]
+    .filter((e) => typeof e.value === "number" && e.value > 0)
+    .sort((a, b) => a.startTime - b.startTime);
+  if (sorted.length === 0) return 0;
+  let maxSessionSum = 0;
+  let sessionSum = sorted[0].value;
+  let sessionStart = sorted[0].startTime;
+  for (let i = 1; i < sorted.length; i++) {
+    const e = sorted[i];
+    const gap = e.startTime - sorted[i - 1].startTime;
+    const window = e.startTime - sessionStart;
+    if (gap > 1000 || window > 5000) {
+      maxSessionSum = Math.max(maxSessionSum, sessionSum);
+      sessionSum = e.value;
+      sessionStart = e.startTime;
+    } else {
+      sessionSum += e.value;
+    }
+  }
+  return Math.max(maxSessionSum, sessionSum);
+}
 
 function parseTraceEvents(traceText) {
   try {
@@ -188,7 +213,14 @@ function parseTraceToReport(
     if (RASTER_EVENT_NAMES.has(name)) rasterMs += dur / 1000;
     if (COMPOSITE_EVENT_NAMES.has(name)) compositeMs += dur / 1000;
     if (name === "RunTask" && dur / 1000 > 50) {
-      longTasks.push({ name, durationMs: dur / 1000, startSec: tsToSec(ts) });
+      longTasks.push({
+        name,
+        durationMs: dur / 1000,
+        startSec: tsToSec(ts),
+        ts,
+        dur,
+        tid: event.tid ?? 0,
+      });
     }
     if (name === "UpdateCounters") {
       const data = (event.args?.data ?? {}) || {};
@@ -203,6 +235,32 @@ function parseTraceToReport(
       if (typeof nodes === "number")
         domPoints.push({ timeSec: tsToSec(ts), value: nodes });
     }
+  }
+
+  // Attribute long tasks: find dominant child event (what caused the delay)
+  const completeEvents = events.filter((e) => e.ph === "X" && e.dur > 0);
+  for (const task of longTasks) {
+    const children = completeEvents.filter(
+      (e) =>
+        e.tid === task.tid &&
+        e.ts >= task.ts &&
+        e.ts + e.dur <= task.ts + task.dur &&
+        e.name !== "RunTask"
+    );
+    const byName = new Map();
+    for (const c of children) {
+      const n = c.name ?? "(unknown)";
+      byName.set(n, (byName.get(n) ?? 0) + c.dur);
+    }
+    let bestName = null;
+    let bestDur = 0;
+    for (const [n, d] of byName) {
+      if (d > bestDur) {
+        bestDur = d;
+        bestName = n;
+      }
+    }
+    task.attribution = bestName ?? task.name;
   }
 
   const mapToSeries = (bucket, label, unit) => {
@@ -239,8 +297,8 @@ function parseTraceToReport(
         })),
       };
 
-  // CPU: convert to percentage (0-100). Sample window is ~1s per bucket from trace, 2s from CDP samples.
-  const SAMPLE_WINDOW_MS = 2000; // 2-second sampling interval
+  // CPU: convert to percentage (0-100). Trace buckets are per-second; CDP samples now 1s interval.
+  const SAMPLE_WINDOW_MS = 1000;
   const toCpuPercent = (ms) =>
     Math.min(100, Math.max(0, (ms / SAMPLE_WINDOW_MS) * 100));
 
@@ -347,6 +405,12 @@ function parseTraceToReport(
     0
   );
 
+  const layoutShiftEntries = fallback.clientCollector?.layoutShiftEntries;
+  const cls =
+    layoutShiftEntries != null
+      ? computeClsFromEntries(layoutShiftEntries)
+      : (fallback.clientCollector?.cls ?? 0);
+
   return {
     startedAt: new Date(startedAt).toISOString(),
     stoppedAt: new Date(stoppedAt).toISOString(),
@@ -362,7 +426,13 @@ function parseTraceToReport(
       totalTimeMs: longTasks.reduce((s, t) => s + t.durationMs, 0),
       topTasks: longTasks
         .sort((a, b) => b.durationMs - a.durationMs)
-        .slice(0, 5),
+        .slice(0, 5)
+        .map((t) => ({
+          name: t.name,
+          durationMs: t.durationMs,
+          startSec: t.startSec,
+          attribution: t.attribution,
+        })),
     },
     networkSummary: {
       requests: networkRequests.length,
@@ -389,7 +459,7 @@ function parseTraceToReport(
     webVitals: {
       fcpMs: fallback.clientCollector?.fcp,
       lcpMs: fallback.clientCollector?.lcp,
-      cls: fallback.clientCollector?.cls,
+      cls,
       tbtMs: tbt,
       longTaskCount: fallback.clientCollector?.longTasks?.length ?? 0,
       longTaskTotalMs:
@@ -401,7 +471,13 @@ function parseTraceToReport(
     spikeFrames: [],
     video: null,
     suggestions,
+    gpuEstimated: gpuFromFallback,
   };
 }
 
-module.exports = { parseTraceToReport, parseTraceEvents, readTraceFromZip };
+module.exports = {
+  parseTraceToReport,
+  parseTraceEvents,
+  readTraceFromZip,
+  computeClsFromEntries,
+};
