@@ -104,6 +104,39 @@ Colors and layout match the original **performance-testing-app** (PerfTrace):
 - Cards: `rounded-2xl`, `border-[var(--border)]`, `shadow-[var(--glow)]`
 - Primary actions: gradient `from-violet-600 to-purple-600`
 
+## Desktop App (Electron)
+
+Run PerfTrace as a native desktop app on **Windows**, **macOS**, and **Linux**—no cloud, no Docker, fully offline.
+
+### Run locally
+
+```bash
+npm install
+npm run electron
+```
+
+This builds the client, starts the Express server, and opens the app in an Electron window.
+
+### Package for distribution
+
+```bash
+npm run electron:make
+```
+
+Creates installers in `out/make/`:
+
+- **Windows**: `.exe` (Squirrel) or `.zip` (portable)
+- **macOS**: `.dmg` or `.zip`
+- **Linux**: `.deb` or `.zip`
+
+Share the packaged app via GitHub Releases, company intranet, or USB. Users install and run locally—no internet required.
+
+### Requirements
+
+- **Playwright Chromium**: Installed automatically via `postinstall`. If you package the app, ensure users run `npx playwright install chromium` once, or bundle it (adds ~150MB).
+- **macOS**: Headed mode works; VNC is Linux-only.
+- **Windows**: Headed mode works; no VNC.
+
 ## Docker
 
 ```bash

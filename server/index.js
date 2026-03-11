@@ -87,18 +87,28 @@ app.get("*", (req, res, next) => {
   if (fs.existsSync(path.join(clientDist, "index.html"))) {
     res.sendFile(path.join(clientDist, "index.html"));
   } else {
-    res
-      .status(404)
-      .json({
-        error:
-          "Not found. Run npm run build first, or use the dev client at http://localhost:5173",
-      });
+    res.status(404).json({
+      error:
+        "Not found. Run npm run build first, or use the dev client at http://localhost:5173",
+    });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`PerfTrace server running at http://localhost:${PORT}`);
-  console.log(
-    "API: POST /api/start, POST /api/stop, GET /api/metrics, GET /api/video"
-  );
-});
+function startServer(port = PORT) {
+  return new Promise((resolve) => {
+    const server = app.listen(port, () => {
+      console.log(`PerfTrace server running at http://localhost:${port}`);
+      console.log(
+        "API: POST /api/start, POST /api/stop, GET /api/metrics, GET /api/video"
+      );
+      resolve(server);
+    });
+  });
+}
+
+// Auto-start when run directly (npm run server or node server/index.js)
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };

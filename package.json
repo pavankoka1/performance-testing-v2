@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "description": "Self-hosted performance testing with Playwright, Xvfb, and noVNC streaming",
+  "main": "main.js",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "node server/index.js",
     "client": "cd client && npm run dev",
     "build": "cd client && npm run build",
     "start": "node server.js",
+    "electron": "npm run build && electron-forge start",
+    "electron:package": "npm run build && electron-forge package",
+    "electron:make": "npm run build && electron-forge make",
     "postinstall": "npm install --prefix client && playwright install chromium"
   },
   "dependencies": {
@@ -22,9 +26,55 @@
     "yauzl": "^3.2.0"
   },
   "devDependencies": {
-    "concurrently": "^9.0.1"
+    "@electron-forge/cli": "^7.6.0",
+    "@electron-forge/maker-deb": "^7.6.0",
+    "@electron-forge/maker-dmg": "^7.6.0",
+    "@electron-forge/maker-squirrel": "^7.6.0",
+    "@electron-forge/maker-zip": "^7.6.0",
+    "concurrently": "^9.0.1",
+    "electron": "^33.2.0"
   },
   "engines": {
     "node": ">=18"
+  },
+  "config": {
+    "forge": {
+      "packagerConfig": {
+        "name": "PerfTrace",
+        "executableName": "PerfTrace",
+        "asar": true,
+        "ignore": [
+          "/node_modules/\\.cache",
+          "/\\.git",
+          "/\\.env",
+          "\\.log$",
+          "/client/node_modules"
+        ]
+      },
+      "makers": [
+        {
+          "name": "@electron-forge/maker-squirrel",
+          "config": {
+            "name": "PerfTrace"
+          }
+        },
+        {
+          "name": "@electron-forge/maker-zip",
+          "platforms": [
+            "darwin",
+            "win32",
+            "linux"
+          ]
+        },
+        {
+          "name": "@electron-forge/maker-dmg",
+          "config": {}
+        },
+        {
+          "name": "@electron-forge/maker-deb",
+          "config": {}
+        }
+      ]
+    }
   }
 }
