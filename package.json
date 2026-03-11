@@ -12,11 +12,11 @@
     "start": "node server.js",
     "electron": "npm run build && electron-forge start",
     "electron:package": "npm run build && electron-forge package",
-    "electron:make": "npm run build && electron-forge make",
-    "electron:make:mac": "npm run build && electron-forge make --platform darwin --arch universal",
+    "electron:make": "npm run build && rm -rf out && electron-forge make",
+    "electron:make:mac": "npm run build && rm -rf out && electron-forge make --platform darwin --arch universal",
     "electron:make:win": "npm run build && electron-forge make --platform win32 --arch x64",
     "electron:make:linux": "npm run build && electron-forge make --platform linux --arch x64",
-    "electron:make:all": "npm run build && electron-forge make -p darwin -a universal && electron-forge make -p win32 -a x64 && electron-forge make -p linux -a x64",
+    "electron:make:all": "npm run build && rm -rf out && electron-forge make -p darwin -a universal && electron-forge make -p win32 -a x64 && electron-forge make -p linux -a x64",
     "postinstall": "npm install --prefix client && playwright install chromium"
   },
   "dependencies": {
@@ -39,35 +39,5 @@
   },
   "engines": {
     "node": ">=18"
-  },
-  "config": {
-    "forge": {
-      "packagerConfig": {
-        "name": "PerfTrace",
-        "executableName": "PerfTrace",
-        "asar": true,
-        "ignore": [
-          "/node_modules/\\.cache",
-          "/\\.git",
-          "/\\.env",
-          "\\.log$",
-          "/client/node_modules"
-        ]
-      },
-      "makers": [
-        {
-          "name": "@electron-forge/maker-zip",
-          "platforms": [
-            "darwin",
-            "win32",
-            "linux"
-          ]
-        },
-        {
-          "name": "@electron-forge/maker-dmg",
-          "config": {}
-        }
-      ]
-    }
   }
 }
