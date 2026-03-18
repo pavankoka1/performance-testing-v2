@@ -7,9 +7,10 @@ import {
   Monitor,
   ShieldCheck,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "react-hot-toast";
 import LiveMetricsPanel from "./LiveMetricsPanel";
+import MetricHelpModal from "./MetricHelpModal";
 import MetricsGlossary from "./MetricsGlossary";
 import ProcessingLoader from "./ProcessingLoader";
 import RecordButtons from "./RecordButtons";
@@ -29,13 +30,23 @@ const isValidUrl = (value: string) => {
 };
 
 export default function Dashboard() {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState("https://react-re-render.vercel.app/");
   const [cpuThrottle, setCpuThrottle] = useState<CpuThrottle>(1);
   const [trackReactRerenders, setTrackReactRerenders] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [report, setReport] = useState<PerfReport | null>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [helpModalMetricId, setHelpModalMetricId] = useState<string | null>(
+    null
+  );
+  const stopAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      stopAbortRef.current?.abort();
+    };
+  }, []);
 
   const handleStart = useCallback(async () => {
     if (!isValidUrl(url)) {
@@ -85,11 +96,17 @@ export default function Dashboard() {
     setIsRecording(false);
     setStreamUrl(null);
     setIsProcessing(true);
+    stopAbortRef.current?.abort();
+    const controller = new AbortController();
+    stopAbortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 min max
     try {
       const response = await fetch("/api/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       const data = await readJsonResponse(response);
       if (!response.ok) {
         throw new Error(
@@ -101,10 +118,16 @@ export default function Dashboard() {
       setReport(data.report as PerfReport);
       toast.success("Trace processed. Report ready.");
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to stop recording.";
+      const isAbort = error instanceof Error && error.name === "AbortError";
+      const message = isAbort
+        ? "Processing timed out. Try a shorter session or check server load."
+        : error instanceof Error
+          ? error.message
+          : "Unable to stop recording.";
       toast.error(message);
     } finally {
+      clearTimeout(timeoutId);
+      stopAbortRef.current = null;
       setIsProcessing(false);
     }
   }, []);
@@ -190,7 +213,7 @@ export default function Dashboard() {
                 href={streamUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20"
+                className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20"
               >
                 <Monitor className="h-4 w-4" />
                 Open VNC stream to interact with browser
@@ -219,9 +242,20 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <MetricsGlossary />
+        <MetricsGlossary onOpenHelp={setHelpModalMetricId} />
 
-        {isProcessing ? <ProcessingLoader /> : <ReportViewer report={report} />}
+        {isProcessing ? (
+          <ProcessingLoader />
+        ) : (
+          <ReportViewer report={report} onOpenHelp={setHelpModalMetricId} />
+        )}
+
+        {helpModalMetricId && (
+          <MetricHelpModal
+            metricId={helpModalMetricId}
+            onClose={() => setHelpModalMetricId(null)}
+          />
+        )}
       </main>
     </div>
   );

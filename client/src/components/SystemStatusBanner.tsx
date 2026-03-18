@@ -101,7 +101,7 @@ export default function SystemStatusBanner() {
             type="button"
             onClick={fetchStatus}
             disabled={loading}
-            className="rounded-lg p-1.5 text-[var(--fg-muted)] transition hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)] disabled:opacity-50"
+            className="cursor-pointer rounded-lg p-1.5 text-[var(--fg-muted)] transition hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)] disabled:cursor-not-allowed disabled:opacity-50"
             title="Refresh system status"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />

@@ -91,8 +91,17 @@ export default function GraphModal({
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-fade-in">
       <div
-        className="absolute inset-0 bg-black/75 backdrop-blur-md"
+        className="absolute inset-0 cursor-pointer bg-black/75 backdrop-blur-md"
         onClick={onClose}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        aria-label="Close"
       />
       <div
         className="relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl shadow-black/50"
@@ -106,7 +115,7 @@ export default function GraphModal({
             <button
               type="button"
               onClick={() => setPlaying((p) => !p)}
-              className="rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+              className="cursor-pointer rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
               aria-label={playing ? "Pause" : "Play"}
             >
               {playing ? (
@@ -118,7 +127,7 @@ export default function GraphModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+              className="cursor-pointer rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
               aria-label="Close"
             >
               <X className="h-5 w-5" />
@@ -127,7 +136,7 @@ export default function GraphModal({
         </div>
 
         <div className="flex-1 overflow-auto p-4">
-          <div className="mb-4 h-64 w-full">
+          <div className="mb-4 h-64 w-full cursor-pointer">
             {isEmpty ? (
               <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-sm text-[var(--fg-muted)]">
                 No data

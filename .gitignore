@@ -6,3 +6,5 @@ client/dist/
 *.log
 .DS_Store
 out/
+playwright-browsers/
+.tmp-*/

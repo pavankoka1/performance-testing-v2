@@ -4,6 +4,15 @@
  */
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
+
+// Must set before any Playwright code loads — bundled Chromium lives in Resources
+if (app.isPackaged && process.resourcesPath) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(
+    process.resourcesPath,
+    "playwright-browsers"
+  );
+}
+
 const { startServer } = require("./server/index.js");
 
 const PORT = process.env.PORT || 3000;

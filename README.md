@@ -144,13 +144,23 @@ Output in `out/make/`:
 
 All builds work from macOS without Mono, Wine, or Linux packaging tools.
 
-**M4 / Apple Silicon**: Your Mac is arm64. The `arm64.dmg` or `universal.dmg` both run natively. If macOS blocks the app ("unidentified developer"), right-click → Open.
+### Sharing the app with other laptops
 
-Share the packaged app via GitHub Releases, company intranet, or USB. Users install and run locally—no internet required.
+**Chromium is bundled** — The packaged app includes Playwright Chromium (~250MB). Recipients do not need to install anything. Share the `.dmg` (macOS) or `.zip` (Windows/Linux) via USB, email, or file share.
+
+**macOS Gatekeeper** — If recipients see "PerfTrace cannot be opened because it is from an unidentified developer":
+
+1. Right-click (or Control+click) the app
+2. Choose **Open**
+3. Click **Open** in the dialog
+
+Alternatively: System Settings → Privacy & Security → scroll to the app → click **Open Anyway**.
+
+**Architecture note** — Universal macOS builds include Chromium for your Mac's architecture. Built on Apple Silicon → works on M1/M2/M3/M4. Built on Intel → works on Intel Macs. For best compatibility, build on the target architecture or use `npm run electron:make` (single-arch) instead of universal.
 
 ### Requirements
 
-- **Playwright Chromium**: Installed automatically via `postinstall`. If you package the app, ensure users run `npx playwright install chromium` once, or bundle it (adds ~150MB).
+- **Chromium**: Bundled automatically during packaging. No user install needed.
 - **macOS**: Headed mode works; VNC is Linux-only.
 - **Windows**: Headed mode works; no VNC.
 

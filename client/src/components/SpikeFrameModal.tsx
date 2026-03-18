@@ -36,9 +36,17 @@ export default function SpikeFrameModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm"
         onClick={onClose}
-        onKeyDown={(e) => e.key === "Escape" && onClose()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        aria-label="Close"
       />
       <div
         className="relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl"
@@ -53,7 +61,7 @@ export default function SpikeFrameModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+            className="cursor-pointer rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
             aria-label="Close"
           >
             <X className="h-5 w-5" />

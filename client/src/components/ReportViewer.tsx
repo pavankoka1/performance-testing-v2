@@ -3,6 +3,7 @@ import type { PerfReport } from "@/lib/reportTypes";
 import {
   BarChart2,
   Download,
+  HelpCircle,
   Layers,
   ListChecks,
   MemoryStick,
@@ -14,7 +15,10 @@ import GraphModal from "./GraphModal";
 import MetricChart from "./MetricChart";
 import ReactRerendersSection from "./ReactRerendersSection";
 
-type ReportViewerProps = { report: PerfReport | null };
+type ReportViewerProps = {
+  report: PerfReport | null;
+  onOpenHelp?: (metricId: string) => void;
+};
 
 type GraphModalState = {
   title: string;
@@ -33,7 +37,7 @@ const formatBytes = (value: number) => {
   return `${formatNumber(value / 1024 ** index)} ${units[index]}`;
 };
 
-function ReportViewer({ report }: ReportViewerProps) {
+function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [reportTimeSec, setReportTimeSec] = useState(0);
   const [graphModal, setGraphModal] = useState<GraphModalState>(null);
@@ -107,7 +111,7 @@ function ReportViewer({ report }: ReportViewerProps) {
           <button
             type="button"
             onClick={() => downloadReportHtml(report)}
-            className="flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1.5 transition hover:border-[var(--accent)]/50 hover:bg-[var(--accent-dim)]"
+            className="flex cursor-pointer items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1.5 transition hover:border-[var(--accent)]/50 hover:bg-[var(--accent-dim)]"
           >
             <Download className="h-3.5 w-3.5" />
             Export HTML Report
@@ -132,6 +136,8 @@ function ReportViewer({ report }: ReportViewerProps) {
           data={report.fpsSeries.points}
           durationSec={durationSec}
           yDomain={[0, 120]}
+          metricId="fps"
+          onOpenHelp={onOpenHelp}
           onOpenModal={() =>
             setGraphModal({
               title: "FPS over time",
@@ -147,6 +153,8 @@ function ReportViewer({ report }: ReportViewerProps) {
           data={report.cpuSeries.points}
           durationSec={durationSec}
           yDomain={[0, 100]}
+          metricId="cpu"
+          onOpenHelp={onOpenHelp}
           onOpenModal={() =>
             setGraphModal({
               title: "CPU utilisation",
@@ -165,6 +173,8 @@ function ReportViewer({ report }: ReportViewerProps) {
           subtitle={
             report.gpuEstimated ? "Estimated from raster+composite" : undefined
           }
+          metricId="gpu"
+          onOpenHelp={onOpenHelp}
           onOpenModal={() =>
             setGraphModal({
               title: "GPU utilisation",
@@ -179,6 +189,8 @@ function ReportViewer({ report }: ReportViewerProps) {
           unit="MB"
           data={report.memorySeries.points}
           durationSec={durationSec}
+          metricId="js-heap"
+          onOpenHelp={onOpenHelp}
           onOpenModal={() =>
             setGraphModal({
               title: "JS heap",
@@ -193,6 +205,8 @@ function ReportViewer({ report }: ReportViewerProps) {
           unit="count"
           data={report.domNodesSeries.points}
           durationSec={durationSec}
+          metricId="dom-nodes"
+          onOpenHelp={onOpenHelp}
           onOpenModal={() =>
             setGraphModal({
               title: "DOM nodes",
@@ -211,6 +225,8 @@ function ReportViewer({ report }: ReportViewerProps) {
             { timeSec: 2, value: report.layoutMetrics.paintTimeMs },
           ]}
           labelFormatter={(p) => (p.timeSec === 1 ? "Layout" : "Paint")}
+          metricId="layout"
+          onOpenHelp={onOpenHelp}
         />
         <MetricChart
           title="Animation frames per second"
@@ -219,6 +235,8 @@ function ReportViewer({ report }: ReportViewerProps) {
             report.animationMetrics?.animationFrameEventsPerSec?.points ?? []
           }
           durationSec={durationSec}
+          metricId="animation-frames"
+          onOpenHelp={onOpenHelp}
           onOpenModal={() =>
             setGraphModal({
               title: "Animation frames per second",
@@ -247,9 +265,20 @@ function ReportViewer({ report }: ReportViewerProps) {
 
       <div className="mt-8 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
-            <BarChart2 className="h-4 w-4 text-[var(--accent)]" />
-            Render breakdown
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <BarChart2 className="h-4 w-4 text-[var(--accent)]" />
+              Render breakdown
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenHelp?.("render-breakdown")}
+              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-card)] hover:text-[var(--accent)]"
+              title="Learn about this metric"
+              aria-label="Learn about render breakdown"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
           </div>
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
             <p>Script: {formatNumber(report.renderBreakdown.scriptMs)}ms</p>
@@ -262,9 +291,20 @@ function ReportViewer({ report }: ReportViewerProps) {
         </div>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
-            <Layers className="h-4 w-4 text-[var(--accent)]" />
-            Layout & paint
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <Layers className="h-4 w-4 text-[var(--accent)]" />
+              Layout & paint
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenHelp?.("layout")}
+              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-card)] hover:text-[var(--accent)]"
+              title="Learn about this metric"
+              aria-label="Learn about layout and paint"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
           </div>
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
             <p>Layouts: {report.layoutMetrics.layoutCount}</p>
@@ -279,9 +319,20 @@ function ReportViewer({ report }: ReportViewerProps) {
         </div>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
-            <Wrench className="h-4 w-4 text-[var(--accent)]" />
-            Long tasks
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <Wrench className="h-4 w-4 text-[var(--accent)]" />
+              Long tasks
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenHelp?.("long-tasks")}
+              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-card)] hover:text-[var(--accent)]"
+              title="Learn about this metric"
+              aria-label="Learn about long tasks"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
           </div>
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
             <p>Count: {report.longTasks.count}</p>
@@ -305,9 +356,20 @@ function ReportViewer({ report }: ReportViewerProps) {
         </div>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
-            <MemoryStick className="h-4 w-4 text-[var(--accent)]" />
-            Web Vitals
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <MemoryStick className="h-4 w-4 text-[var(--accent)]" />
+              Web Vitals
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenHelp?.("web-vitals")}
+              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-card)] hover:text-[var(--accent)]"
+              title="Learn about this metric"
+              aria-label="Learn about Web Vitals"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
           </div>
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
             {report.webVitals.fcpMs != null && (
@@ -327,9 +389,20 @@ function ReportViewer({ report }: ReportViewerProps) {
 
       {report.developerHints?.reactRerenders && (
         <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-6">
-          <h3 className="mb-4 text-lg font-semibold text-[var(--fg)]">
-            React re-renders
-          </h3>
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <h3 className="text-lg font-semibold text-[var(--fg)]">
+              React re-renders
+            </h3>
+            <button
+              type="button"
+              onClick={() => onOpenHelp?.("react-rerenders")}
+              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-card)] hover:text-[var(--accent)]"
+              title="Learn about this metric"
+              aria-label="Learn about React re-renders"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
+          </div>
           <ReactRerendersSection
             data={report.developerHints.reactRerenders}
             durationSec={durationSec}

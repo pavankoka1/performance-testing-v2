@@ -1,4 +1,5 @@
 import type { MetricPoint } from "@/lib/reportTypes";
+import { HelpCircle } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -22,6 +23,9 @@ type MetricChartProps = {
   yDomain?: [number, number];
   /** Optional subtitle, e.g. "(estimated from raster+composite)" */
   subtitle?: string;
+  /** Metric ID for help modal; if set, shows help icon */
+  metricId?: string;
+  onOpenHelp?: (metricId: string) => void;
 };
 
 const formatValue = (value: number) =>
@@ -37,6 +41,8 @@ export default function MetricChart({
   onOpenModal,
   yDomain,
   subtitle,
+  metricId,
+  onOpenHelp,
 }: MetricChartProps) {
   const chartData = data.map((point, i) => ({
     id: i,
@@ -59,11 +65,22 @@ export default function MetricChart({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {metricId && onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp(metricId)}
+              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-elevated)] hover:text-[var(--accent)]"
+              title="Learn about this metric"
+              aria-label="Learn about this metric"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
+          )}
           {onOpenModal && (
             <button
               type="button"
               onClick={onOpenModal}
-              className="text-xs text-[var(--accent)] hover:underline"
+              className="cursor-pointer text-xs text-[var(--accent)] hover:underline"
             >
               Open in modal
             </button>
