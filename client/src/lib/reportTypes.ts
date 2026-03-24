@@ -35,6 +35,49 @@ export type NetworkRequest = {
   durationMs?: number;
 };
 
+/** Asset category: build = main HTML doc, json = API responses (xhr/fetch), rest = static assets */
+export type AssetCategory =
+  | "build"
+  | "script"
+  | "stylesheet"
+  | "document"
+  | "json"
+  | "image"
+  | "font"
+  | "other";
+
+export type DownloadedAsset = {
+  url: string;
+  category: AssetCategory;
+  transferSize?: number;
+  durationMs?: number;
+};
+
+export type DownloadedAssetsSummary = {
+  byCategory: Record<
+    AssetCategory,
+    { count: number; totalBytes: number; files: DownloadedAsset[] }
+  >;
+  totalBytes: number;
+  totalCount: number;
+};
+
+export type BlockingSummary = {
+  totalBlockedMs: number;
+  longTaskCount: number;
+  maxBlockingMs: number;
+  /** Main thread blocked time (sum of long task durations > 50ms) */
+  mainThreadBlockedMs: number;
+};
+
+export type SummaryStats = {
+  avgFps: number;
+  avgCpu: number;
+  avgGpu: number;
+  peakMemMb: number;
+  peakDomNodes: number;
+};
+
 export type PerfReport = {
   startedAt: string;
   stoppedAt: string;
@@ -111,6 +154,12 @@ export type PerfReport = {
   }>;
   video: { url: string; format: string } | null;
   suggestions: BottleneckSuggestion[];
+  /** Downloaded files by category (JS, CSS, HTML, JSON, images, fonts) */
+  downloadedAssets?: DownloadedAssetsSummary;
+  /** Main thread blocking from long tasks */
+  blockingSummary?: BlockingSummary;
+  /** Precomputed summary stats (avg CPU, avg FPS, etc.) */
+  summaryStats?: SummaryStats;
   developerHints?: {
     reactRerenders?: {
       totalEvents: number;

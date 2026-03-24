@@ -73,6 +73,73 @@ export function buildReportHtml(report: PerfReport): string {
     )
     .join("");
 
+  const assetLabels: Record<string, string> = {
+    build: "Build (main HTML)",
+    script: "Scripts (.js)",
+    stylesheet: "Styles (.css)",
+    document: "Other documents",
+    json: "API responses (XHR/fetch)",
+    image: "Images",
+    font: "Fonts",
+    other: "Other",
+  };
+  const assetCategories = [
+    "build",
+    "script",
+    "stylesheet",
+    "document",
+    "json",
+    "image",
+    "font",
+    "other",
+  ] as const;
+  const downloadedAssetsHtml =
+    report.downloadedAssets && report.downloadedAssets.totalCount > 0
+      ? `
+  <h2>Downloaded files — Build size, scripts, styles, API responses, assets</h2>
+  <p>Total: ${formatBytes(report.downloadedAssets.totalBytes)} (${
+    report.downloadedAssets.totalCount
+  } files)</p>
+  <div class="grid">
+    ${assetCategories
+      .map((cat) => {
+        const data = report.downloadedAssets!.byCategory[cat];
+        if (!data || data.count === 0) return "";
+        return `<div class="card"><span class="card-label">${escapeHtml(assetLabels[cat] ?? cat)}</span><div class="card-value">${data.count} files · ${formatBytes(data.totalBytes)}</div></div>`;
+      })
+      .filter(Boolean)
+      .join("")}
+  </div>
+  <table>
+    <thead><tr><th>Category</th><th>URL</th><th>Size</th></tr></thead>
+    <tbody>
+      ${assetCategories
+        .flatMap((cat) => {
+          const data = report.downloadedAssets!.byCategory[cat];
+          if (!data || data.files.length === 0) return [];
+          return data.files
+            .slice(0, 20)
+            .map(
+              (f) =>
+                `<tr><td>${escapeHtml(assetLabels[cat] ?? cat)}</td><td class="url-cell">${escapeHtml(f.url)}</td><td>${f.transferSize != null ? formatBytes(f.transferSize) : "—"}</td></tr>`
+            );
+        })
+        .join("")}
+    </tbody>
+  </table>`
+      : "";
+
+  const blockingHtml =
+    report.blockingSummary && report.blockingSummary.longTaskCount > 0
+      ? `
+  <h2>Main thread blocking</h2>
+  <p>Long tasks: ${report.blockingSummary.longTaskCount} | Total blocked: ${formatNum(
+    report.blockingSummary.totalBlockedMs
+  )} ms | Main thread blocked (TBT): ${formatNum(
+    report.blockingSummary.mainThreadBlockedMs
+  )} ms | Longest: ${formatNum(report.blockingSummary.maxBlockingMs)} ms</p>`
+      : "";
+
   const networkRows = report.networkRequests
     .slice(0, 100)
     .map(
@@ -228,6 +295,10 @@ export function buildReportHtml(report: PerfReport): string {
   )} ms | Raster: ${formatNum(
     report.renderBreakdown.rasterMs
   )} ms | Composite: ${formatNum(report.renderBreakdown.compositeMs)} ms</p>
+
+  ${blockingHtml}
+
+  ${downloadedAssetsHtml}
 
   <h2>Network</h2>
   <p>Requests: ${report.networkSummary.requests} | Total: ${formatBytes(

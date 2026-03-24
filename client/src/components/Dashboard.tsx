@@ -1,136 +1,19 @@
-import type { PerfReport } from "@/lib/reportTypes";
-import {
-  Activity,
-  ChevronDown,
-  Cpu,
-  Layers,
-  Monitor,
-  ShieldCheck,
-} from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Toaster, toast } from "react-hot-toast";
-import LiveMetricsPanel from "./LiveMetricsPanel";
+import { useRecording } from "@/hooks/useRecording";
+import { ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { Toaster } from "react-hot-toast";
 import MetricHelpModal from "./MetricHelpModal";
 import MetricsGlossary from "./MetricsGlossary";
 import ProcessingLoader from "./ProcessingLoader";
-import RecordButtons from "./RecordButtons";
+import RecordFormSection from "./RecordFormSection";
 import ReportViewer from "./ReportViewer";
-import SystemStatusBanner from "./SystemStatusBanner";
-import URLInput from "./URLInput";
-
-type CpuThrottle = 1 | 4 | 6;
-
-const isValidUrl = (value: string) => {
-  try {
-    const parsed = new URL(value);
-    return ["http:", "https:"].includes(parsed.protocol);
-  } catch {
-    return false;
-  }
-};
 
 export default function Dashboard() {
-  const [url, setUrl] = useState("https://react-re-render.vercel.app/");
-  const [cpuThrottle, setCpuThrottle] = useState<CpuThrottle>(1);
-  const [trackReactRerenders, setTrackReactRerenders] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [report, setReport] = useState<PerfReport | null>(null);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const { isRecording, isProcessing, report, streamUrl, start, stop } =
+    useRecording();
   const [helpModalMetricId, setHelpModalMetricId] = useState<string | null>(
     null
   );
-  const stopAbortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    return () => {
-      stopAbortRef.current?.abort();
-    };
-  }, []);
-
-  const handleStart = useCallback(async () => {
-    if (!isValidUrl(url)) {
-      toast.error("Enter a valid URL starting with http:// or https://");
-      return;
-    }
-
-    setIsRecording(true);
-    setReport(null);
-    setStreamUrl(null);
-
-    try {
-      const response = await fetch("/api/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url,
-          cpuThrottle,
-          trackReactRerenders,
-        }),
-      });
-      const data = await readJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(
-          typeof data.error === "string"
-            ? data.error
-            : "Failed to start recording."
-        );
-      }
-      if (data.streamUrl) {
-        setStreamUrl(data.streamUrl);
-        toast.success(
-          "Recording started. Open the VNC stream to interact with the browser."
-        );
-      } else {
-        toast.success("Recording started. Browser session is active.");
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to start recording.";
-      toast.error(message);
-      setIsRecording(false);
-    }
-  }, [url, cpuThrottle, trackReactRerenders]);
-
-  const handleStop = useCallback(async () => {
-    setIsRecording(false);
-    setStreamUrl(null);
-    setIsProcessing(true);
-    stopAbortRef.current?.abort();
-    const controller = new AbortController();
-    stopAbortRef.current = controller;
-    const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 min max
-    try {
-      const response = await fetch("/api/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const data = await readJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(
-          typeof data.error === "string"
-            ? data.error
-            : "Failed to stop recording."
-        );
-      }
-      setReport(data.report as PerfReport);
-      toast.success("Trace processed. Report ready.");
-    } catch (error) {
-      const isAbort = error instanceof Error && error.name === "AbortError";
-      const message = isAbort
-        ? "Processing timed out. Try a shorter session or check server load."
-        : error instanceof Error
-          ? error.message
-          : "Unable to stop recording.";
-      toast.error(message);
-    } finally {
-      clearTimeout(timeoutId);
-      stopAbortRef.current = null;
-      setIsProcessing(false);
-    }
-  }, []);
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--fg)]">
@@ -158,89 +41,13 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 sm:py-10">
-        <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--glow)]">
-          <div className="flex flex-col gap-6">
-            <SystemStatusBanner />
-            <URLInput value={url} onChange={setUrl} />
-            <div className="flex flex-col gap-2">
-              <label className="flex items-center gap-2 text-sm font-medium text-[var(--fg)]">
-                <Cpu className="h-4 w-4 text-[var(--accent)]" />
-                CPU throttling (low-end device simulation)
-              </label>
-              <div className="relative w-full max-w-xs">
-                <select
-                  value={cpuThrottle}
-                  onChange={(e) =>
-                    setCpuThrottle(Number(e.target.value) as CpuThrottle)
-                  }
-                  disabled={isRecording || isProcessing}
-                  className="w-full appearance-none rounded-xl border border-[var(--border)] bg-[var(--bg)] py-2.5 pl-4 pr-11 text-sm text-[var(--fg)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-dim)] focus:outline-none disabled:opacity-50"
-                >
-                  <option value={1}>1× — No throttling</option>
-                  <option value={4}>
-                    4× — Slower CPU (e.g. low-end mobile)
-                  </option>
-                  <option value={6}>6× — Heavier throttle</option>
-                </select>
-                <ChevronDown
-                  aria-hidden
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--fg-muted)]"
-                />
-              </div>
-            </div>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--fg)]">
-              <input
-                type="checkbox"
-                checked={trackReactRerenders}
-                onChange={(e) => setTrackReactRerenders(e.target.checked)}
-                disabled={isRecording || isProcessing}
-                className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
-              />
-              <Layers className="h-4 w-4 text-[var(--accent)]" />
-              <span>Track React re-renders</span>
-              <span className="text-xs text-[var(--fg-muted)]">
-                (React apps only, dev build recommended)
-              </span>
-            </label>
-            <RecordButtons
-              isRecording={isRecording}
-              isProcessing={isProcessing}
-              onStart={handleStart}
-              onStop={handleStop}
-            />
-            {streamUrl && (
-              <a
-                href={streamUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20"
-              >
-                <Monitor className="h-4 w-4" />
-                Open VNC stream to interact with browser
-              </a>
-            )}
-            <div className="flex items-center gap-3 text-sm text-[var(--fg-muted)]">
-              <span
-                className={`h-2.5 w-2.5 rounded-full shadow-sm ${
-                  isRecording
-                    ? "bg-emerald-400 shadow-emerald-400/50"
-                    : "bg-[var(--fg-muted)]/40"
-                }`}
-              />
-              {isRecording ? (
-                <span className="flex items-center gap-2 font-medium text-emerald-400">
-                  <Activity className="h-4 w-4 animate-pulse" />
-                  Recording in progress…
-                </span>
-              ) : isProcessing ? (
-                "Processing trace and generating report…"
-              ) : (
-                "Idle — paste a URL and launch to begin."
-              )}
-            </div>
-            {isRecording && <LiveMetricsPanel isRecording={isRecording} />}
-          </div>
-        </section>
+        <RecordFormSection
+          isRecording={isRecording}
+          isProcessing={isProcessing}
+          streamUrl={streamUrl}
+          onStart={start}
+          onStop={stop}
+        />
 
         <MetricsGlossary onOpenHelp={setHelpModalMetricId} />
 
@@ -260,12 +67,3 @@ export default function Dashboard() {
     </div>
   );
 }
-
-const readJsonResponse = async (response: Response) => {
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    return { error: text || "Unexpected response from server." };
-  }
-};

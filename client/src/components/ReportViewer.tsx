@@ -3,11 +3,13 @@ import type { PerfReport } from "@/lib/reportTypes";
 import {
   BarChart2,
   Download,
+  FileCode,
   HelpCircle,
   Layers,
   ListChecks,
   MemoryStick,
   Wrench,
+  ZapOff,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import AnimationTimeline from "./AnimationTimeline";
@@ -128,6 +130,62 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
           </div>
         </div>
       </div>
+
+      {report.summaryStats && (
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
+            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
+              Avg FPS
+            </p>
+            <p className="text-lg font-semibold text-[var(--accent)]">
+              {formatNumber(report.summaryStats.avgFps)}
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
+            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
+              Avg CPU
+            </p>
+            <p className="text-lg font-semibold text-[var(--accent)]">
+              {formatNumber(report.summaryStats.avgCpu)}%
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
+            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
+              Avg GPU
+            </p>
+            <p className="text-lg font-semibold text-[var(--accent)]">
+              {formatNumber(report.summaryStats.avgGpu)}%
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
+            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
+              Peak heap
+            </p>
+            <p className="text-lg font-semibold text-[var(--accent)]">
+              {formatNumber(report.summaryStats.peakMemMb)} MB
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
+            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
+              Peak DOM
+            </p>
+            <p className="text-lg font-semibold text-[var(--accent)]">
+              {formatNumber(report.summaryStats.peakDomNodes)}
+            </p>
+          </div>
+          {report.blockingSummary &&
+            report.blockingSummary.longTaskCount > 0 && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                <p className="text-[10px] uppercase tracking-wider text-amber-400/80">
+                  Main thread blocked
+                </p>
+                <p className="text-lg font-semibold text-amber-400">
+                  {formatNumber(report.blockingSummary.mainThreadBlockedMs)} ms
+                </p>
+              </div>
+            )}
+        </div>
+      )}
 
       <div className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
         <MetricChart
@@ -386,6 +444,101 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
           </div>
         </div>
       </div>
+
+      {report.blockingSummary && report.blockingSummary.longTaskCount > 0 && (
+        <div className="mt-8 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+            <ZapOff className="h-4 w-4 text-amber-400" />
+            Main thread blocking
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 text-sm text-[var(--fg-muted)]">
+            <p>Long tasks: {report.blockingSummary.longTaskCount}</p>
+            <p>
+              Total blocked:{" "}
+              {formatNumber(report.blockingSummary.totalBlockedMs)} ms
+            </p>
+            <p>
+              Main thread blocked (TBT):{" "}
+              {formatNumber(report.blockingSummary.mainThreadBlockedMs)} ms
+            </p>
+            <p>
+              Longest task: {formatNumber(report.blockingSummary.maxBlockingMs)}{" "}
+              ms
+            </p>
+          </div>
+        </div>
+      )}
+
+      {report.downloadedAssets && report.downloadedAssets.totalCount > 0 && (
+        <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-6">
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+            <FileCode className="h-4 w-4 text-[var(--accent)]" />
+            Downloaded files — Build size, scripts, styles, API responses,
+            assets
+          </div>
+          <div className="mb-4 flex flex-wrap gap-3 text-xs">
+            <span className="rounded-full border border-[var(--border)] px-3 py-1">
+              Total: {formatBytes(report.downloadedAssets.totalBytes)} (
+              {report.downloadedAssets.totalCount} files)
+            </span>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {(
+              [
+                "build",
+                "script",
+                "stylesheet",
+                "document",
+                "json",
+                "image",
+                "font",
+                "other",
+              ] as const
+            ).map((cat) => {
+              const data = report.downloadedAssets!.byCategory[cat];
+              if (!data || data.count === 0) return null;
+              const labels: Record<string, string> = {
+                build: "Build (main HTML doc)",
+                script: "Scripts (.js)",
+                stylesheet: "Styles (.css)",
+                document: "Other documents",
+                json: "API responses (XHR/fetch)",
+                image: "Images",
+                font: "Fonts",
+                other: "Other",
+              };
+              return (
+                <div
+                  key={cat}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/60 p-3"
+                >
+                  <p className="text-[10px] uppercase text-[var(--fg-muted)]">
+                    {labels[cat] ?? cat}
+                  </p>
+                  <p className="font-semibold text-[var(--accent)]">
+                    {data.count} files · {formatBytes(data.totalBytes)}
+                  </p>
+                  {data.files.length > 0 && data.files.length <= 5 && (
+                    <ul className="mt-2 space-y-1 text-xs text-[var(--fg-muted)] truncate">
+                      {data.files.slice(0, 5).map((f, i) => (
+                        <li key={i} className="truncate" title={f.url}>
+                          {formatBytes(f.transferSize ?? 0)} —{" "}
+                          {f.url.split("/").pop()?.slice(0, 30) ?? "—"}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {data.files.length > 5 && (
+                    <p className="mt-2 text-xs text-[var(--fg-muted)]">
+                      +{data.files.length - 5} more
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {report.developerHints?.reactRerenders && (
         <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-6">

@@ -37,6 +37,149 @@ const PAINT_PROPS = new Set([
   "filter",
   "border-radius",
 ]);
+const ASSET_EXT_SCRIPT = /\.(js|mjs|cjs|ts)(\?|$)/i;
+const ASSET_EXT_STYLE = /\.(css|scss|sass|less)(\?|$)/i;
+const ASSET_EXT_DOC = /\.(html|htm)(\?|$)/i;
+const ASSET_EXT_IMAGE = /\.(png|jpg|jpeg|gif|webp|svg|ico|avif)(\?|$)/i;
+const ASSET_EXT_FONT = /\.(woff2?|ttf|otf|eot)(\?|$)/i;
+
+function categorizeAsset(
+  url,
+  initiatorType = "",
+  resourceType = "",
+  isMainDocument = false
+) {
+  if (isMainDocument) return "build";
+  const u = (url || "").toLowerCase();
+  const it = (initiatorType || "").toLowerCase();
+  const rt = (resourceType || "").toLowerCase();
+  if (ASSET_EXT_SCRIPT.test(u) || rt === "script" || it === "script")
+    return "script";
+  if (
+    ASSET_EXT_STYLE.test(u) ||
+    rt === "stylesheet" ||
+    it === "link" ||
+    it === "css"
+  )
+    return "stylesheet";
+  if (ASSET_EXT_DOC.test(u) || rt === "document") return "document";
+  if (
+    rt === "xhr" ||
+    rt === "fetch" ||
+    it === "xmlhttprequest" ||
+    it === "fetch"
+  )
+    return "json";
+  if (ASSET_EXT_IMAGE.test(u) || rt === "image" || it === "img") return "image";
+  if (ASSET_EXT_FONT.test(u) || rt === "font") return "font";
+  return "other";
+}
+
+function buildDownloadedAssetsSummary(
+  resourceEntries,
+  navigationEntries,
+  networkRequests
+) {
+  const byCategory = {
+    build: { count: 0, totalBytes: 0, files: [] },
+    script: { count: 0, totalBytes: 0, files: [] },
+    stylesheet: { count: 0, totalBytes: 0, files: [] },
+    document: { count: 0, totalBytes: 0, files: [] },
+    json: { count: 0, totalBytes: 0, files: [] },
+    image: { count: 0, totalBytes: 0, files: [] },
+    font: { count: 0, totalBytes: 0, files: [] },
+    other: { count: 0, totalBytes: 0, files: [] },
+  };
+  const seen = new Set();
+  let mainDocUrl = null;
+
+  if (!navigationEntries?.length && networkRequests?.length > 0) {
+    const firstDoc = networkRequests.find(
+      (r) => (r.type || "").toLowerCase() === "document"
+    );
+    if (firstDoc) {
+      const url = firstDoc.url || "";
+      mainDocUrl = url;
+      const size = firstDoc.transferSize ?? 0;
+      const key = url.split("?")[0];
+      seen.add("nav:" + key);
+      seen.add(key);
+      byCategory.build.count++;
+      byCategory.build.totalBytes += size;
+      byCategory.build.files.push({
+        url,
+        category: "build",
+        transferSize: size > 0 ? size : undefined,
+        durationMs: firstDoc.durationMs,
+      });
+    }
+  }
+
+  for (const e of navigationEntries || []) {
+    const url = e.url || "";
+    const key = "nav:" + url.split("?")[0];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    mainDocUrl = url;
+    const size = e.transferSize ?? e.encodedBodySize ?? 0;
+    const asset = {
+      url,
+      category: "build",
+      transferSize: size > 0 ? size : undefined,
+      durationMs: e.duration > 0 ? e.duration : undefined,
+    };
+    byCategory.build.count++;
+    byCategory.build.totalBytes += size;
+    byCategory.build.files.push(asset);
+  }
+
+  for (const e of resourceEntries || []) {
+    const url = e.url || "";
+    const key = url.split("?")[0];
+    if (seen.has(key)) continue;
+    if (url === mainDocUrl) continue;
+    seen.add(key);
+    const size = e.transferSize ?? e.encodedBodySize ?? 0;
+    const cat = categorizeAsset(url, e.initiatorType, "", false);
+    const asset = {
+      url,
+      category: cat,
+      transferSize: size > 0 ? size : undefined,
+      durationMs: e.duration > 0 ? e.duration : undefined,
+    };
+    byCategory[cat].count++;
+    byCategory[cat].totalBytes += size;
+    byCategory[cat].files.push(asset);
+  }
+  for (const r of networkRequests || []) {
+    const url = r.url || "";
+    const key = url.split("?")[0];
+    if (seen.has(key)) continue;
+    const size = r.transferSize ?? 0;
+    if (size <= 0) continue;
+    const navKey = "nav:" + key;
+    if (seen.has(navKey)) continue;
+    seen.add(key);
+    const cat = categorizeAsset(url, "", r.type, false);
+    const asset = {
+      url,
+      category: cat,
+      transferSize: size,
+      durationMs: r.durationMs,
+    };
+    byCategory[cat].count++;
+    byCategory[cat].totalBytes += size;
+    byCategory[cat].files.push(asset);
+  }
+  let totalBytes = 0;
+  let totalCount = 0;
+  for (const cat of Object.keys(byCategory)) {
+    totalBytes += byCategory[cat].totalBytes;
+    totalCount += byCategory[cat].count;
+  }
+  return { byCategory, totalBytes, totalCount };
+}
+
 const SKIP_KEYFRAME_KEYS = new Set([
   "offset",
   "easing",
@@ -381,6 +524,39 @@ async function ensureMemoryAndDomCollector(page) {
   });
 }
 
+async function ensureResourceTimingCollector(page) {
+  await page.addInitScript(() => {
+    const w = window;
+    if (w.__perftraceResources !== undefined) return;
+    w.__perftraceResources = { resources: [], navigation: [] };
+    const poll = () => {
+      try {
+        const resources = performance.getEntriesByType?.("resource") ?? [];
+        const navEntries = performance.getEntriesByType?.("navigation") ?? [];
+        w.__perftraceResources = {
+          resources: resources.map((e) => ({
+            url: e.name,
+            transferSize: e.transferSize ?? 0,
+            encodedBodySize: e.encodedBodySize ?? 0,
+            decodedBodySize: e.decodedBodySize ?? 0,
+            duration: e.duration ?? 0,
+            initiatorType: e.initiatorType ?? "",
+          })),
+          navigation: navEntries.map((e) => ({
+            url: e.name,
+            transferSize: e.transferSize ?? 0,
+            encodedBodySize: e.encodedBodySize ?? 0,
+            decodedBodySize: e.decodedBodySize ?? 0,
+            duration: e.duration ?? 0,
+          })),
+        };
+      } catch {}
+    };
+    poll();
+    setInterval(poll, 2000);
+  });
+}
+
 async function ensureFpsCollector(page) {
   await page.evaluate(() => {
     const w = window;
@@ -543,6 +719,7 @@ async function createCaptureSession(
   await ensureClientCollectors(page);
   await ensureMemoryAndDomCollector(page);
   await ensureAnimationPropertyCollector(page);
+  await ensureResourceTimingCollector(page);
 
   let rrtClient = null;
   if (trackReactRerenders) {
@@ -729,6 +906,15 @@ async function stopCaptureSession() {
   } catch {}
   fpsSamples.push(...pageFps);
 
+  let resourceEntries = [];
+  let navigationEntries = [];
+  try {
+    const data =
+      (await page.evaluate(() => window.__perftraceResources ?? null)) || {};
+    resourceEntries = Array.isArray(data) ? data : (data.resources ?? []);
+    navigationEntries = Array.isArray(data) ? [] : (data.navigation ?? []);
+  } catch {}
+
   let clientCollector = null;
   let clientAnimationProps = [];
   try {
@@ -860,6 +1046,51 @@ async function stopCaptureSession() {
 
   report.video = lastVideoPath ? { url: "/api/video", format: "webm" } : null;
   report.recordedUrl = recordedUrl ?? null;
+
+  report.downloadedAssets = buildDownloadedAssetsSummary(
+    resourceEntries,
+    navigationEntries,
+    networkRequests
+  );
+
+  const mainThreadBlockedMs = report.longTasks.topTasks.reduce(
+    (s, t) => s + Math.max(0, t.durationMs - 50),
+    0
+  );
+  report.blockingSummary = {
+    totalBlockedMs: report.longTasks.totalTimeMs,
+    longTaskCount: report.longTasks.count,
+    maxBlockingMs:
+      report.longTasks.topTasks.length > 0
+        ? Math.max(...report.longTasks.topTasks.map((t) => t.durationMs))
+        : 0,
+    mainThreadBlockedMs,
+  };
+
+  const cpuPoints = report.cpuSeries?.points ?? [];
+  const fpsPoints = report.fpsSeries?.points ?? [];
+  const gpuPoints = report.gpuSeries?.points ?? [];
+  const memPoints = report.memorySeries?.points ?? [];
+  const domPoints = report.domNodesSeries?.points ?? [];
+  report.summaryStats = {
+    avgFps:
+      fpsPoints.length > 0
+        ? fpsPoints.reduce((s, p) => s + p.value, 0) / fpsPoints.length
+        : 0,
+    avgCpu:
+      cpuPoints.length > 0
+        ? cpuPoints.reduce((s, p) => s + p.value, 0) / cpuPoints.length
+        : 0,
+    avgGpu:
+      gpuPoints.length > 0
+        ? gpuPoints.reduce((s, p) => s + p.value, 0) / gpuPoints.length
+        : 0,
+    peakMemMb:
+      memPoints.length > 0 ? Math.max(...memPoints.map((p) => p.value)) : 0,
+    peakDomNodes:
+      domPoints.length > 0 ? Math.max(...domPoints.map((p) => p.value)) : 0,
+  };
+
   if (reactRerenderHint) {
     report.developerHints = {
       ...report.developerHints,
