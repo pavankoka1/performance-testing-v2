@@ -9,8 +9,8 @@
  *   Linux:   out/make/zip/linux/x64/PerfTrace-linux-x64-0.1.0.zip
  */
 window.PERFTRACE_DOWNLOADS = {
-  mac: "https://drive.google.com/file/d/1JivIfaPb8FnZPjnFpbLTfhoMGWr5ajeW/view?usp=drive_link",
-  win: "https://drive.google.com/file/d/1xUr61I2QTU3IpqcUizJM7WyvRQX9udHo/view?usp=drive_link",
+  mac: "https://drive.google.com/file/d/1oOGSzpud9i6O8Q8j69Pko6m0hDXmkZ5f/view?usp=drive_link",
+  win: "https://drive.google.com/file/d/1bsXHG3H7PvcG8h8t90ourrq6V9nVS8TY/view?usp=drive_link",
   linux:
-    "https://drive.google.com/file/d/1PD4L_-n3XLEIYFXlOev_1ZZfMFrbMroj/view?usp=drive_link",
+    "https://drive.google.com/file/d/1IPMzM3gEwGr3iLaN5cu3yyvxqLcozoxY/view?usp=drive_link",
 };
