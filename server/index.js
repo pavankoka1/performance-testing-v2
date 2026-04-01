@@ -9,9 +9,15 @@ const {
   getLatestVideo,
 } = require("./lib/capture");
 const { getSystemStatus } = require("./lib/systemStatus");
+const { CONTENT_SECURITY_POLICY } = require("../csp.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+app.use((req, res, next) => {
+  res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+  next();
+});
 
 app.use(cors());
 app.use(express.json());
@@ -29,6 +35,7 @@ app.post("/api/start", async (req, res) => {
       url,
       cpuThrottle = 1,
       trackReactRerenders = false,
+      recordVideo = true,
     } = req.body || {};
     if (!url || typeof url !== "string") {
       return res
@@ -38,7 +45,8 @@ app.post("/api/start", async (req, res) => {
     const result = await createCaptureSession(
       url,
       cpuThrottle,
-      !!trackReactRerenders
+      !!trackReactRerenders,
+      recordVideo !== false
     );
     return res.json(result);
   } catch (error) {

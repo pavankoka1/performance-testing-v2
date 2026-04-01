@@ -53,7 +53,11 @@ export default function MetricChart({
     value: formatValue(point.value),
   }));
 
-  const isEmpty = !chartData.length || chartData.every((d) => d.value === 0);
+  // Bar charts (e.g. layout vs paint totals) should still render at 0 ms; line charts
+  // with no points are empty; lines with only zeros still show a flat series.
+  const isEmpty =
+    !chartData.length ||
+    (type !== "bar" && chartData.every((d) => d.value === 0));
 
   return (
     <div className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4 transition-all duration-200 hover:border-[var(--accent)]/25 hover:shadow-[0_0_20px_rgba(139,92,246,0.08)]">

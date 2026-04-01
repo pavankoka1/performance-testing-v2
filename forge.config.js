@@ -6,11 +6,28 @@ const path = require("path");
 const fs = require("fs");
 const { execSync } = require("child_process");
 
+// Optional: set APPLE_ID, APPLE_TEAM_ID, APPLE_PASSWORD for signed + notarized macOS builds.
+// See docs/INSTALL-MAC.md for details.
+const hasAppleSigning =
+  process.env.APPLE_ID &&
+  process.env.APPLE_TEAM_ID &&
+  process.env.APPLE_PASSWORD;
+
 module.exports = {
   packagerConfig: {
     name: "PerfTrace",
     executableName: "PerfTrace",
     asar: true,
+    ...(hasAppleSigning
+      ? {
+          osxSign: {},
+          osxNotarize: {
+            appleId: process.env.APPLE_ID,
+            appleIdPassword: process.env.APPLE_PASSWORD,
+            teamId: process.env.APPLE_TEAM_ID,
+          },
+        }
+      : {}),
     // electron-packager uses extraResource (singular) — path(s) copied to Resources/
     extraResource: path.join(__dirname, "playwright-browsers"),
     // Universal build: Chromium binaries are arch-specific but identical in both packages (we bundle both).

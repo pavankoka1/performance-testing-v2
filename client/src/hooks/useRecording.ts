@@ -4,6 +4,12 @@ import { toast } from "react-hot-toast";
 
 type CpuThrottle = 1 | 4 | 6 | 20;
 
+export type RecordingStartOptions = {
+  /** Default true. Disable for long sessions to avoid Playwright video issues. */
+  recordVideo?: boolean;
+  trackReactRerenders?: boolean;
+};
+
 const readJsonResponse = async (response: Response) => {
   const text = await response.text();
   try {
@@ -27,44 +33,52 @@ export function useRecording() {
     []
   );
 
-  const start = useCallback(async (url: string, cpuThrottle: CpuThrottle) => {
-    setIsRecording(true);
-    setReport(null);
-    setStreamUrl(null);
+  const start = useCallback(
+    async (
+      url: string,
+      cpuThrottle: CpuThrottle,
+      options?: RecordingStartOptions
+    ) => {
+      setIsRecording(true);
+      setReport(null);
+      setStreamUrl(null);
 
-    try {
-      const response = await fetch("/api/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url,
-          cpuThrottle,
-          trackReactRerenders: false,
-        }),
-      });
-      const data = await readJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(
-          typeof data.error === "string"
-            ? data.error
-            : "Failed to start recording."
-        );
+      try {
+        const response = await fetch("/api/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url,
+            cpuThrottle,
+            trackReactRerenders: !!options?.trackReactRerenders,
+            recordVideo: options?.recordVideo !== false,
+          }),
+        });
+        const data = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(
+            typeof data.error === "string"
+              ? data.error
+              : "Failed to start recording."
+          );
+        }
+        if (data.streamUrl) {
+          setStreamUrl(data.streamUrl as string);
+          toast.success(
+            "Recording started. Open the VNC stream to interact with the browser."
+          );
+        } else {
+          toast.success("Recording started. Browser session is active.");
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to start recording.";
+        toast.error(message);
+        setIsRecording(false);
       }
-      if (data.streamUrl) {
-        setStreamUrl(data.streamUrl as string);
-        toast.success(
-          "Recording started. Open the VNC stream to interact with the browser."
-        );
-      } else {
-        toast.success("Recording started. Browser session is active.");
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to start recording.";
-      toast.error(message);
-      setIsRecording(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   const stop = useCallback(async () => {
     setIsRecording(false);

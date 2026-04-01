@@ -60,6 +60,28 @@ export type DownloadedAssetsSummary = {
   >;
   totalBytes: number;
   totalCount: number;
+  /** Bytes for main doc + critical path resources before FCP (+ slack) */
+  initialLoadBytes?: number;
+  /** Same as totalBytes — everything transferred during the session */
+  sessionTotalBytes?: number;
+};
+
+export type TbtTimelineEntry = {
+  startSec: number;
+  endSec: number;
+  durationMs: number;
+  blockingMs: number;
+  attribution?: string;
+};
+
+export type FrameTimingHealth = {
+  sampleCount: number;
+  avgFrameMs: number;
+  stdDevDeltaMs: number;
+  maxDeltaMs: number;
+  irregularFrames: number;
+  staggerRisk: "low" | "medium" | "high";
+  wallClockDurationSec: number;
 };
 
 export type BlockingSummary = {
@@ -104,6 +126,7 @@ export type PerfReport = {
       startSec: number;
       attribution?: string;
     }>;
+    tbtTimeline?: TbtTimelineEntry[];
   };
   networkSummary: {
     requests: number;
@@ -144,6 +167,8 @@ export type PerfReport = {
     longTaskCount: number;
     longTaskTotalMs: number;
   };
+  /** DrawFrame-derived frame pacing / jank proxy */
+  frameTiming?: FrameTimingHealth | null;
   spikeFrames: Array<{ timeSec: number; fps: number; imageDataUrl: string }>;
   /** True when GPU data came from raster+composite fallback, not real GPU trace events */
   gpuEstimated?: boolean;

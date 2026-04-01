@@ -2,8 +2,21 @@
  * Electron main process for PerfTrace desktop app.
  * Starts Express server, then opens the app in a native window.
  */
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, session } = require("electron");
+
+/**
+ * Must run before the GPU process starts. Avoids ANGLE/Metal pipeline XPC failures on macOS.
+ * Opt out: PERFTRACE_ANGLE_METAL=1
+ */
+if (
+  process.platform === "darwin" &&
+  process.env.PERFTRACE_ANGLE_METAL !== "1"
+) {
+  app.commandLine.appendSwitch("use-angle", "gl");
+}
+
 const path = require("path");
+const { CONTENT_SECURITY_POLICY } = require("./csp.js");
 
 // Must set before any Playwright code loads — bundled Chromium lives in Resources
 if (app.isPackaged && process.resourcesPath) {
@@ -54,6 +67,21 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      const isLocalApp =
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(details.url) ||
+        details.url.startsWith("file://");
+      if (!isLocalApp) {
+        callback({ responseHeaders: details.responseHeaders });
+        return;
+      }
+      callback({
+        responseHeaders: Object.assign({}, details.responseHeaders, {
+          "Content-Security-Policy": [CONTENT_SECURITY_POLICY],
+        }),
+      });
+    });
+
     await startServer(PORT);
     createWindow();
   } catch (err) {

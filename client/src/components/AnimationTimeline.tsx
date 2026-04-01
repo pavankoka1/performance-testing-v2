@@ -1,6 +1,11 @@
 "use client";
 
-import { humanizeAnimationName, type PerfReport } from "@/lib/reportTypes";
+import {
+  animationDisplayLabel,
+  effectiveBottleneck,
+} from "@/lib/animationUtils";
+import type { PerfReport } from "@/lib/reportTypes";
+import { memo, useMemo } from "react";
 
 type AnimationTimelineProps = {
   animations: NonNullable<PerfReport["animationMetrics"]>["animations"];
@@ -16,36 +21,42 @@ const BOTTLENECK_COLORS = {
 
 const DEFAULT_BAR_MS = 500;
 
-export default function AnimationTimeline({
+function AnimationTimelineInner({
   animations,
   durationSec,
   formatNumber,
 }: AnimationTimelineProps) {
   const effectiveDuration = Math.max(durationSec, 1);
 
-  const bars = animations
-    .map((anim, i) => {
-      const start = anim.startTimeSec ?? i * 0.3;
-      const durationSecBar =
-        anim.durationMs != null
-          ? anim.durationMs / 1000
-          : DEFAULT_BAR_MS / 1000;
-      const leftPct = Math.max(
-        0,
-        Math.min(99, (start / effectiveDuration) * 100)
-      );
-      const widthPct = Math.min(
-        Math.max(0, 100 - leftPct),
-        (durationSecBar / effectiveDuration) * 100
-      );
-      return {
-        ...anim,
-        leftPct,
-        widthPct: Math.max(widthPct, 1.5),
-        durationSecBar,
-      };
-    })
-    .filter((b) => b.widthPct > 0.5);
+  const bars = useMemo(() => {
+    return animations
+      .map((anim, i) => {
+        const start = anim.startTimeSec ?? i * 0.3;
+        const durationSecBar =
+          anim.durationMs != null
+            ? anim.durationMs / 1000
+            : DEFAULT_BAR_MS / 1000;
+        const leftPct = Math.max(
+          0,
+          Math.min(99, (start / effectiveDuration) * 100)
+        );
+        const widthPct = Math.min(
+          Math.max(0, 100 - leftPct),
+          (durationSecBar / effectiveDuration) * 100
+        );
+        const bottleneck = effectiveBottleneck(anim);
+        const label = animationDisplayLabel(anim.name, anim.properties);
+        return {
+          ...anim,
+          leftPct,
+          widthPct: Math.max(widthPct, 1.5),
+          durationSecBar,
+          bottleneck,
+          label,
+        };
+      })
+      .filter((b) => b.widthPct > 0.5);
+  }, [animations, effectiveDuration]);
 
   if (bars.length === 0) {
     return (
@@ -68,10 +79,13 @@ export default function AnimationTimeline({
 
   return (
     <div className="w-full">
-      <div className="relative overflow-x-auto">
-        <div className="min-w-[400px]" style={{ width: "100%" }}>
+      <div className="scrollbar-themed relative overflow-x-auto rounded-lg border border-[var(--border)]/80 bg-[var(--bg)]/40">
+        <div
+          className="min-w-[min(100%,520px)] px-2 py-3"
+          style={{ minWidth: 400 }}
+        >
           <div
-            className="relative mb-2 h-5 border-b border-[var(--border)]"
+            className="relative mb-3 h-5 border-b border-[var(--border)]"
             style={{ minHeight: 20 }}
           >
             {ticks.map((t, i) => (
@@ -87,106 +101,94 @@ export default function AnimationTimeline({
             ))}
           </div>
 
-          <div className="max-h-80 space-y-1 overflow-y-auto">
-            {bars.map((bar, i) => (
-              <div
-                key={`anim-${i}-${bar.id ?? i}`}
-                className="group relative flex h-8 items-center"
-                title={`${humanizeAnimationName(bar.name)} • ${bar.type} • ${
-                  bar.properties?.join(", ") ?? "—"
-                } • ${formatNumber(bar.durationSecBar * 1000)}ms`}
-              >
+          <div className="scrollbar-themed max-h-72 space-y-2 overflow-y-auto pr-1">
+            {bars.map((bar, i) => {
+              const propsStr =
+                bar.properties?.filter(Boolean).join(", ") || "—";
+              return (
                 <div
-                  className="absolute left-0 top-1/2 h-5 w-24 -translate-y-1/2 truncate pr-1 text-right text-xs text-[var(--fg-muted)]"
-                  style={{ minWidth: 96 }}
+                  key={`anim-${i}-${bar.id ?? i}`}
+                  className="group relative flex min-h-9 items-center gap-2"
+                  title={`${bar.label} • ${bar.type} • ${propsStr} • ${formatNumber(bar.durationSecBar * 1000)}ms`}
                 >
-                  <span
-                    className="truncate"
-                    title={
-                      bar.name
-                        ? humanizeAnimationName(bar.name)
-                        : bar.properties?.length
-                          ? bar.properties.join(", ")
-                          : "(unnamed)"
-                    }
-                  >
-                    {bar.name
-                      ? humanizeAnimationName(bar.name)
-                      : bar.properties?.length
-                        ? bar.properties.join(", ")
-                        : "(unnamed)"}
-                  </span>
-                  {bar.bottleneckHint && (
-                    <span
-                      className="ml-1 inline-block rounded px-1 text-[10px]"
-                      style={{
-                        backgroundColor:
-                          bar.bottleneckHint === "compositor"
-                            ? "rgba(16,185,129,0.2)"
-                            : bar.bottleneckHint === "paint"
-                              ? "rgba(245,158,11,0.2)"
-                              : "rgba(239,68,68,0.2)",
-                        color:
-                          bar.bottleneckHint === "compositor"
-                            ? "#10b981"
-                            : bar.bottleneckHint === "paint"
-                              ? "#f59e0b"
-                              : "#ef4444",
-                      }}
-                    >
-                      {bar.bottleneckHint}
+                  <div className="w-[min(28%,9rem)] shrink-0 text-right text-[11px] leading-tight text-[var(--fg-muted)]">
+                    <span className="line-clamp-2 text-[var(--fg)]">
+                      {bar.label}
                     </span>
-                  )}
-                </div>
-                <div
-                  className="relative ml-24 flex-1 overflow-hidden rounded"
-                  style={{ height: 20 }}
-                >
+                    {bar.bottleneck && (
+                      <span
+                        className="mt-0.5 inline-block rounded px-1.5 py-px text-[10px] font-medium"
+                        style={{
+                          backgroundColor:
+                            bar.bottleneck === "compositor"
+                              ? "rgba(16,185,129,0.2)"
+                              : bar.bottleneck === "paint"
+                                ? "rgba(245,158,11,0.2)"
+                                : "rgba(239,68,68,0.2)",
+                          color:
+                            bar.bottleneck === "compositor"
+                              ? "#34d399"
+                              : bar.bottleneck === "paint"
+                                ? "#fbbf24"
+                                : "#f87171",
+                        }}
+                      >
+                        {bar.bottleneck}
+                      </span>
+                    )}
+                  </div>
                   <div
-                    className="absolute top-1/2 h-4 -translate-y-1/2 rounded opacity-90 transition-opacity group-hover:opacity-100"
-                    style={{
-                      left: `${bar.leftPct}%`,
-                      width: `${bar.widthPct}%`,
-                      minWidth: 4,
-                      backgroundColor: bar.bottleneckHint
-                        ? BOTTLENECK_COLORS[bar.bottleneckHint]
-                        : "#64748b",
-                    }}
-                  />
+                    className="relative min-w-0 flex-1 overflow-hidden rounded-md border border-[var(--border)]/50 bg-[var(--bg-elevated)]/30"
+                    style={{ height: 22 }}
+                  >
+                    <div
+                      className="absolute top-1/2 h-[18px] -translate-y-1/2 rounded-sm opacity-95 shadow-sm transition-opacity group-hover:opacity-100"
+                      style={{
+                        left: `${bar.leftPct}%`,
+                        width: `${bar.widthPct}%`,
+                        minWidth: 4,
+                        backgroundColor: bar.bottleneck
+                          ? BOTTLENECK_COLORS[bar.bottleneck]
+                          : "#64748b",
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-4 text-xs text-[var(--fg-muted)]">
+      <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-[11px] text-[var(--fg-muted)]">
         <span className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-3 rounded"
             style={{ backgroundColor: BOTTLENECK_COLORS.compositor }}
           />
-          compositor (transform/opacity)
+          Compositor (transform / opacity)
         </span>
         <span className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-3 rounded"
             style={{ backgroundColor: BOTTLENECK_COLORS.paint }}
           />
-          paint (color, shadow)
+          Paint (color, shadow, filter…)
         </span>
         <span className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-3 rounded"
             style={{ backgroundColor: BOTTLENECK_COLORS.layout }}
           />
-          layout (width, margin)
+          Layout (size, position, flex…)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-3 rounded bg-slate-500" />
-          unknown
+          <span className="inline-block h-2.5 w-3 rounded bg-slate-500/90" />
+          Unclassified — rare custom property
         </span>
       </div>
     </div>
   );
 }
+
+export default memo(AnimationTimelineInner);

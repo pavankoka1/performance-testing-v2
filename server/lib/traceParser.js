@@ -29,8 +29,19 @@ const COMPOSITE_EVENT_NAMES = new Set([
   "BeginMainFrame",
   "Commit",
 ]);
-const LAYOUT_EVENT_NAMES = new Set(["Layout", "UpdateLayoutTree"]);
-const PAINT_EVENT_NAMES = new Set(["Paint", "PaintImage"]);
+const LAYOUT_EVENT_NAMES = new Set([
+  "Layout",
+  "UpdateLayoutTree",
+  "InterleavedLayout",
+  "LocalLayout",
+]);
+const PAINT_EVENT_NAMES = new Set([
+  "Paint",
+  "PaintImpl",
+  "PaintImage",
+  "PaintSetup",
+  "PrePaint",
+]);
 
 /**
  * CLS per spec: session window algorithm.
@@ -58,6 +69,61 @@ function computeClsFromEntries(entries) {
     }
   }
   return Math.max(maxSessionSum, sessionSum);
+}
+
+/**
+ * Detect uneven frame delivery from DrawFrame timestamps (proxy for jank /
+ * "staggering" when average FPS alone looks fine).
+ */
+function computeFrameTimingHealth(
+  drawFrameTs,
+  traceTsToSec,
+  wallClockDurationSec
+) {
+  if (!drawFrameTs || drawFrameTs.length < 8) return null;
+  const uniq = [];
+  let last = -Infinity;
+  for (const t of drawFrameTs) {
+    if (t - last > traceTsToSec * 0.5) uniq.push(t);
+    last = t;
+  }
+  if (uniq.length < 6) return null;
+  const deltasMs = [];
+  for (let i = 1; i < uniq.length; i++) {
+    deltasMs.push((uniq[i] - uniq[i - 1]) / traceTsToSec);
+  }
+  if (deltasMs.length === 0) return null;
+  const mean = deltasMs.reduce((s, d) => s + d, 0) / deltasMs.length;
+  const variance =
+    deltasMs.reduce((s, d) => s + (d - mean) ** 2, 0) / deltasMs.length;
+  const stdDevDeltaMs = Math.sqrt(variance);
+  const maxDeltaMs = Math.max(...deltasMs);
+  const expected60 = 1000 / 60;
+  const irregularFrames = deltasMs.filter((d) => d > expected60 * 1.75).length;
+  const ratio = mean > 0 ? stdDevDeltaMs / mean : 0;
+  let staggerRisk = "low";
+  if (
+    ratio > 0.55 ||
+    maxDeltaMs > 48 ||
+    irregularFrames / deltasMs.length > 0.12
+  )
+    staggerRisk = "high";
+  else if (
+    ratio > 0.35 ||
+    maxDeltaMs > 34 ||
+    irregularFrames / deltasMs.length > 0.06
+  )
+    staggerRisk = "medium";
+
+  return {
+    sampleCount: uniq.length,
+    avgFrameMs: mean,
+    stdDevDeltaMs,
+    maxDeltaMs,
+    irregularFrames,
+    staggerRisk,
+    wallClockDurationSec,
+  };
 }
 
 function parseTraceEvents(traceText) {
@@ -165,6 +231,7 @@ function parseTraceToReport(
   let layoutTimeMs = 0;
   let paintTimeMs = 0;
   const longTasks = [];
+  const drawFrameTs = [];
   let scriptMs = 0;
   let layoutMs = 0;
   let rasterMs = 0;
@@ -184,7 +251,10 @@ function parseTraceToReport(
     const ts = event.ts ?? 0;
     const dur = event.dur ?? 0;
 
-    if (FRAME_EVENT_NAMES.has(name)) addToBucket(fpsMap, ts, 1);
+    if (FRAME_EVENT_NAMES.has(name)) {
+      addToBucket(fpsMap, ts, 1);
+      if (typeof ts === "number") drawFrameTs.push(ts);
+    }
     if (event.ph === "X" && dur > 0) {
       const durMs = dur / 1000;
       if (cat.includes("toplevel") || name === "RunTask")
@@ -200,12 +270,12 @@ function parseTraceToReport(
         addToBucket(gpuBusyMap, ts, durMs);
       }
     }
-    if (LAYOUT_EVENT_NAMES.has(name)) {
+    if (event.ph === "X" && dur > 0 && LAYOUT_EVENT_NAMES.has(name)) {
       layoutCount++;
       layoutTimeMs += dur / 1000;
       layoutMs += dur / 1000;
     }
-    if (PAINT_EVENT_NAMES.has(name)) {
+    if (event.ph === "X" && dur > 0 && PAINT_EVENT_NAMES.has(name)) {
       paintCount++;
       paintTimeMs += dur / 1000;
     }
@@ -368,6 +438,13 @@ function parseTraceToReport(
             .map((s) => ({ timeSec: s.timeSec, value: s.nodes })),
         };
 
+  const sampleLayoutSum =
+    fallback.samples?.reduce((s, x) => s + (x.layoutMs ?? 0), 0) ?? 0;
+  const samplePaintSum =
+    fallback.samples?.reduce((s, x) => s + (x.paintMs ?? 0), 0) ?? 0;
+  if (sampleLayoutSum > layoutTimeMs) layoutTimeMs = sampleLayoutSum;
+  if (samplePaintSum > paintTimeMs) paintTimeMs = samplePaintSum;
+
   const totalBytes = networkRequests.reduce(
     (s, r) => s + (r.transferSize ?? 0),
     0
@@ -391,7 +468,8 @@ function parseTraceToReport(
       severity: "warning",
     });
   }
-  if (longTasks.length > 10) {
+  const clientLongEarly = fallback.clientCollector?.longTasks ?? [];
+  if (longTasks.length > 10 || clientLongEarly.length > 10) {
     suggestions.push({
       title: "Long tasks detected",
       detail:
@@ -400,16 +478,88 @@ function parseTraceToReport(
     });
   }
 
-  const tbt = (fallback.clientCollector?.longTasks ?? []).reduce(
+  const clientTbt = (fallback.clientCollector?.longTasks ?? []).reduce(
     (s, t) => s + Math.max(0, t.duration - 50),
     0
   );
+
+  const sortedLong = [...longTasks].sort((a, b) => a.ts - b.ts);
+  let tbtTimeline = sortedLong.map((t) => {
+    const blockingMs = Math.max(0, t.durationMs - 50);
+    return {
+      startSec: t.startSec,
+      endSec: t.startSec + t.durationMs / 1000,
+      durationMs: t.durationMs,
+      blockingMs,
+      attribution: t.attribution || t.name,
+    };
+  });
+  let tbtFromTrace = tbtTimeline.reduce((s, x) => s + x.blockingMs, 0);
+  if (tbtTimeline.length === 0 && fallback.clientCollector?.longTasks?.length) {
+    tbtTimeline = fallback.clientCollector.longTasks.map((t) => {
+      const durationMs = t.duration ?? 0;
+      const startSec = (t.start ?? 0) / 1000;
+      return {
+        startSec,
+        endSec: startSec + durationMs / 1000,
+        durationMs,
+        blockingMs: Math.max(0, durationMs - 50),
+        attribution: "longtask (PerformanceObserver)",
+      };
+    });
+    tbtFromTrace = tbtTimeline.reduce((s, x) => s + x.blockingMs, 0);
+  }
+  const tbtMs = tbtTimeline.length > 0 ? tbtFromTrace : clientTbt;
+
+  drawFrameTs.sort((a, b) => a - b);
+  const frameTiming = computeFrameTimingHealth(
+    drawFrameTs,
+    traceTsToSec,
+    wallClockDurationSec
+  );
+
+  if (frameTiming?.staggerRisk === "high") {
+    suggestions.push({
+      title: "Irregular frame pacing (possible UI jank)",
+      detail:
+        "Frame-to-frame timing variance is high vs steady 60fps — main-thread or compositor work may be uneven even if average FPS looks fine. Compare with TBT and long tasks.",
+      severity: "warning",
+    });
+  }
 
   const layoutShiftEntries = fallback.clientCollector?.layoutShiftEntries;
   const cls =
     layoutShiftEntries != null
       ? computeClsFromEntries(layoutShiftEntries)
       : (fallback.clientCollector?.cls ?? 0);
+
+  const clientLong = clientLongEarly;
+  const longTaskCountForUi =
+    longTasks.length > 0 ? longTasks.length : clientLong.length;
+  const longTaskTotalMsForUi =
+    longTasks.length > 0
+      ? longTasks.reduce((s, t) => s + t.durationMs, 0)
+      : clientLong.reduce((s, t) => s + (t.duration ?? 0), 0);
+  const topTasksForUi =
+    longTasks.length > 0
+      ? longTasks
+          .sort((a, b) => b.durationMs - a.durationMs)
+          .slice(0, 5)
+          .map((t) => ({
+            name: t.name,
+            durationMs: t.durationMs,
+            startSec: t.startSec,
+            attribution: t.attribution,
+          }))
+      : [...clientLong]
+          .sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0))
+          .slice(0, 5)
+          .map((t) => ({
+            name: "longtask",
+            durationMs: t.duration ?? 0,
+            startSec: (t.start ?? 0) / 1000,
+            attribution: "PerformanceObserver",
+          }));
 
   return {
     startedAt: new Date(startedAt).toISOString(),
@@ -422,18 +572,13 @@ function parseTraceToReport(
     domNodesSeries: domSeries,
     layoutMetrics: { layoutCount, paintCount, layoutTimeMs, paintTimeMs },
     longTasks: {
-      count: longTasks.length,
-      totalTimeMs: longTasks.reduce((s, t) => s + t.durationMs, 0),
-      topTasks: longTasks
-        .sort((a, b) => b.durationMs - a.durationMs)
-        .slice(0, 5)
-        .map((t) => ({
-          name: t.name,
-          durationMs: t.durationMs,
-          startSec: t.startSec,
-          attribution: t.attribution,
-        })),
+      count: longTaskCountForUi,
+      totalTimeMs: longTaskTotalMsForUi,
+      topTasks: topTasksForUi,
+      /** All >50ms main-thread tasks for TBT timeline (blocking = duration − 50ms). */
+      tbtTimeline: tbtTimeline,
     },
+    frameTiming,
     networkSummary: {
       requests: networkRequests.length,
       totalBytes,
@@ -460,13 +605,9 @@ function parseTraceToReport(
       fcpMs: fallback.clientCollector?.fcp,
       lcpMs: fallback.clientCollector?.lcp,
       cls,
-      tbtMs: tbt,
-      longTaskCount: fallback.clientCollector?.longTasks?.length ?? 0,
-      longTaskTotalMs:
-        fallback.clientCollector?.longTasks?.reduce(
-          (s, t) => s + t.duration,
-          0
-        ) ?? 0,
+      tbtMs,
+      longTaskCount: longTaskCountForUi,
+      longTaskTotalMs: longTaskTotalMsForUi,
     },
     spikeFrames: [],
     video: null,

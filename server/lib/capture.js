@@ -11,32 +11,73 @@ const { chromium } = require("playwright");
 const yauzl = require("yauzl");
 const {
   parseTraceToReport,
-  readTraceFromZip,
   computeClsFromEntries,
+  parseTraceEvents,
 } = require("./traceParser");
 
-const LAYOUT_PROPS = new Set([
-  "width",
-  "height",
-  "top",
-  "left",
-  "right",
-  "bottom",
-  "margin",
-  "padding",
-  "border",
-  "font-size",
-  "display",
-  "position",
-]);
-const PAINT_PROPS = new Set([
-  "color",
-  "background",
-  "box-shadow",
-  "outline",
-  "filter",
-  "border-radius",
-]);
+/** Read Chrome trace from CDP Tracing.end (stream or inline). Required for GPU/layout/paint in trace. */
+async function readCdpTracingTrace(traceCdp) {
+  if (!traceCdp) return "";
+  try {
+    const endResult = await traceCdp.send("Tracing.end");
+    if (endResult?.data && typeof endResult.data === "string") {
+      return endResult.data;
+    }
+    const stream =
+      endResult?.stream ??
+      endResult?.value?.stream ??
+      endResult?.result?.stream;
+    if (!stream) {
+      return "";
+    }
+    const chunks = [];
+    let eof = false;
+    while (!eof) {
+      const r = await traceCdp.send("IO.read", { stream });
+      if (r?.data) {
+        if (r.base64Encoded) {
+          chunks.push(Buffer.from(r.data, "base64").toString("utf8"));
+        } else {
+          chunks.push(typeof r.data === "string" ? r.data : String(r.data));
+        }
+      }
+      eof = !!r?.eof;
+    }
+    try {
+      await traceCdp.send("IO.close", { stream });
+    } catch {
+      /* ignore */
+    }
+    return chunks.join("");
+  } catch (e) {
+    console.warn("[PerfTrace] CDP Tracing.end:", e?.message || e);
+    return "";
+  }
+}
+
+/**
+ * Prefer CDP trace for GPU/layout/paint. Playwright's trace zip is large but often
+ * lacks devtools.timeline GPU categories; CDP Tracing.start() is the source of truth.
+ */
+function pickTraceTextForParser(playwrightTraceText, cdpTraceText) {
+  const pw = playwrightTraceText
+    ? parseTraceEvents(playwrightTraceText).length
+    : 0;
+  const cdp = cdpTraceText ? parseTraceEvents(cdpTraceText).length : 0;
+  if (cdp >= 400) return cdpTraceText;
+  if (cdp > pw * 2 && cdp > 80) return cdpTraceText;
+  if (
+    cdp > 0 &&
+    (cdpTraceText.includes("devtools.timeline") ||
+      cdpTraceText.includes('"cat":"gpu"') ||
+      cdpTraceText.includes('"cat":"cc"'))
+  ) {
+    return cdpTraceText;
+  }
+  if (pw > 0) return playwrightTraceText;
+  return cdpTraceText || playwrightTraceText || "";
+}
+
 const ASSET_EXT_SCRIPT = /\.(js|mjs|cjs|ts)(\?|$)/i;
 const ASSET_EXT_STYLE = /\.(css|scss|sass|less)(\?|$)/i;
 const ASSET_EXT_DOC = /\.(html|htm)(\?|$)/i;
@@ -78,7 +119,8 @@ function categorizeAsset(
 function buildDownloadedAssetsSummary(
   resourceEntries,
   navigationEntries,
-  networkRequests
+  networkRequests,
+  fcpMs
 ) {
   const byCategory = {
     build: { count: 0, totalBytes: 0, files: [] },
@@ -177,7 +219,50 @@ function buildDownloadedAssetsSummary(
     totalBytes += byCategory[cat].totalBytes;
     totalCount += byCategory[cat].count;
   }
-  return { byCategory, totalBytes, totalCount };
+  const initialLoadBytes = computeInitialLoadBytes(
+    byCategory,
+    resourceEntries,
+    fcpMs
+  );
+  return {
+    byCategory,
+    totalBytes,
+    totalCount,
+    initialLoadBytes,
+    /** Alias: everything transferred during the session */
+    sessionTotalBytes: totalBytes,
+  };
+}
+
+/** Resources finishing before FCP (+ slack) count toward "initial" bundle. */
+function computeInitialLoadBytes(byCategory, resourceEntries, fcpMs) {
+  const resByUrl = new Map();
+  for (const e of resourceEntries || []) {
+    const key = (e.url || e.name || "").split("?")[0];
+    if (key) resByUrl.set(key, e);
+  }
+  const SLACK_MS = 500;
+  const cutoff = fcpMs != null && fcpMs > 0 ? fcpMs + SLACK_MS : 3500;
+
+  const cats = ["build", "script", "stylesheet", "font", "document"];
+  let sum = 0;
+  for (const cat of cats) {
+    const bucket = byCategory[cat];
+    if (!bucket?.files) continue;
+    for (const f of bucket.files) {
+      const key = (f.url || "").split("?")[0];
+      const re = resByUrl.get(key);
+      const end = re?.responseEnd;
+      const size = f.transferSize ?? 0;
+      if (size <= 0) continue;
+      if (cat === "build") {
+        sum += size;
+        continue;
+      }
+      if (typeof end === "number" && end > 0 && end <= cutoff) sum += size;
+    }
+  }
+  return sum;
 }
 
 const SKIP_KEYFRAME_KEYS = new Set([
@@ -185,6 +270,7 @@ const SKIP_KEYFRAME_KEYS = new Set([
   "easing",
   "composite",
   "compositeoperation",
+  "computedoffset",
   "flex",
   "flexgrow",
   "flexshrink",
@@ -254,26 +340,235 @@ function extractAnimationName(a, source) {
   return "";
 }
 
-function inferBottleneck(properties, animationName) {
-  if (properties?.length) {
-    const lower = properties.map((p) => p.toLowerCase());
-    if (
-      lower.some(
-        (p) =>
-          LAYOUT_PROPS.has(p) || p.includes("margin") || p.includes("padding")
-      )
+function normalizeAnimationEntries(animations) {
+  return animations.map((a) => {
+    const raw = a.properties ?? [];
+    const cleaned = sanitizeAnimationProperties(raw);
+    const props = cleaned?.length ? cleaned : [];
+    let name = (a.name || "").trim();
+    if (!name || name === "(unnamed)") {
+      if (props.length) {
+        name = props
+          .map((p) =>
+            p
+              ? p.charAt(0).toUpperCase() +
+                p.slice(1).replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+              : ""
+          )
+          .filter(Boolean)
+          .join(", ");
+      } else {
+        name = "Animation";
+      }
+    }
+    const bottleneckHint =
+      inferBottleneck(props.length ? props : undefined, name) ??
+      a.bottleneckHint;
+    return {
+      ...a,
+      name,
+      bottleneckHint,
+      properties: props.length ? props : undefined,
+    };
+  });
+}
+
+/** Web Animations / keyframes may use camelCase property names. */
+function kebabCssProperty(prop) {
+  if (typeof prop !== "string" || !prop.trim()) return "";
+  const s = prop.trim();
+  if (s.includes("-")) return s.toLowerCase();
+  return s
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+    .toLowerCase();
+}
+
+/**
+ * Classify one animated CSS property. Order: compositor → paint → layout checks
+ * (inferBottleneck then applies worst-cost: layout &gt; paint &gt; compositor).
+ */
+function classifyCssAnimatedProperty(prop) {
+  const p = kebabCssProperty(prop);
+  if (!p) return null;
+
+  if (
+    p === "transform" ||
+    p === "opacity" ||
+    p === "perspective" ||
+    p === "translate" ||
+    p === "scale" ||
+    p === "rotate"
+  )
+    return "compositor";
+  if (
+    p.startsWith("translate") ||
+    p.startsWith("scale") ||
+    p.startsWith("rotate")
+  )
+    return "compositor";
+  if (p === "transform-origin" || p === "perspective-origin")
+    return "compositor";
+  if (p === "z-index" || p === "will-change") return "compositor";
+
+  if (p.includes("radius")) return "paint";
+  if (p === "box-shadow" || p === "text-shadow") return "paint";
+  if (p.startsWith("background") || p === "color") return "paint";
+  if (p === "fill" || p === "stroke") return "paint";
+  if (
+    p === "stroke-width" ||
+    p === "stroke-dashoffset" ||
+    p === "stroke-dasharray"
+  )
+    return "paint";
+  if (p.endsWith("-opacity") && p !== "opacity") return "paint";
+  if (p.includes("border") && p.includes("color")) return "paint";
+  if (p === "border-image" || p.startsWith("border-image-")) return "paint";
+  if (p === "outline" || p.startsWith("outline-")) return "paint";
+  if (p === "filter" || p === "backdrop-filter" || p === "clip-path")
+    return "paint";
+  if (p === "mix-blend-mode" || p === "isolation") return "paint";
+
+  if (
+    [
+      "width",
+      "height",
+      "min-width",
+      "max-width",
+      "min-height",
+      "max-height",
+    ].includes(p)
+  )
+    return "layout";
+  if (
+    ["top", "left", "right", "bottom", "inset"].includes(p) ||
+    p.startsWith("inset-")
+  )
+    return "layout";
+  if (p.startsWith("margin") || p.startsWith("padding")) return "layout";
+  if (p === "border" || p === "border-width" || p === "border-style")
+    return "layout";
+  if (
+    p.startsWith("border-") &&
+    (p.includes("width") ||
+      p.includes("spacing") ||
+      /-(top|right|bottom|left|inline|block|start|end|horizontal|vertical)-(width|style)$/.test(
+        p
+      ))
+  )
+    return "layout";
+  if (
+    /^border-(top|right|bottom|left|inline|block|start|end|horizontal|vertical)$/.test(
+      p
     )
-      return "layout";
-    if (
-      lower.some(
-        (p) =>
-          PAINT_PROPS.has(p) || p.includes("shadow") || p.includes("background")
-      )
-    )
-      return "paint";
-    if (lower.some((p) => p === "transform" || p === "opacity"))
-      return "compositor";
+  )
+    return "layout";
+  if (
+    p.startsWith("flex") ||
+    p.startsWith("grid") ||
+    p === "gap" ||
+    p === "row-gap" ||
+    p === "column-gap" ||
+    p === "place-content" ||
+    p === "place-items" ||
+    p === "align-content" ||
+    p === "align-items" ||
+    p === "justify-content"
+  )
+    return "layout";
+  if (
+    [
+      "display",
+      "position",
+      "float",
+      "clear",
+      "font-size",
+      "line-height",
+      "letter-spacing",
+      "word-spacing",
+      "vertical-align",
+      "text-align",
+      "box-sizing",
+      "white-space",
+      "word-break",
+      "aspect-ratio",
+      "object-fit",
+      "object-position",
+    ].includes(p)
+  )
+    return "layout";
+  if (p.startsWith("overflow") || p === "scroll-behavior") return "layout";
+
+  return null;
+}
+
+/** Strip Web Animations metadata keys (not CSS properties). */
+function sanitizeAnimationProperties(props) {
+  if (!props?.length) return undefined;
+  const META = new Set([
+    "computedoffset",
+    "offset",
+    "easing",
+    "composite",
+    "compositeoperation",
+    "flex",
+    "flexgrow",
+    "flexshrink",
+    "flexbasis",
+  ]);
+  const out = props.filter((p) => {
+    if (typeof p !== "string" || !p.trim()) return false;
+    const norm = kebabCssProperty(p).replace(/-/g, "");
+    if (META.has(norm)) return false;
+    return true;
+  });
+  return out.length ? out : undefined;
+}
+
+/** When keyframes omit properties, infer from animation/transition name (e.g. box-shadow, border-*-radius). */
+function inferBottleneckFromAnimationName(animationName) {
+  if (!animationName || typeof animationName !== "string") return undefined;
+  let s = animationName.trim();
+  const trans = /^Transition\s*\(([\s\S]+)\)\s*$/i.exec(s);
+  if (trans) s = trans[1].trim();
+  const segments = s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const parts = segments.length ? segments : [s];
+  let hasLayout = false;
+  let hasPaint = false;
+  let hasCompositor = false;
+  for (const seg of parts) {
+    const c = classifyCssAnimatedProperty(seg);
+    if (c === "layout") hasLayout = true;
+    else if (c === "paint") hasPaint = true;
+    else if (c === "compositor") hasCompositor = true;
   }
+  if (hasLayout) return "layout";
+  if (hasPaint) return "paint";
+  if (hasCompositor) return "compositor";
+  return undefined;
+}
+
+function inferBottleneck(properties, animationName) {
+  const cleaned = sanitizeAnimationProperties(properties);
+  if (cleaned?.length) {
+    let hasLayout = false;
+    let hasPaint = false;
+    let hasCompositor = false;
+    for (const raw of cleaned) {
+      const bucket = classifyCssAnimatedProperty(raw);
+      if (bucket === "layout") hasLayout = true;
+      else if (bucket === "paint") hasPaint = true;
+      else if (bucket === "compositor") hasCompositor = true;
+    }
+    if (hasLayout) return "layout";
+    if (hasPaint) return "paint";
+    if (hasCompositor) return "compositor";
+  }
+  const fromName = inferBottleneckFromAnimationName(animationName);
+  if (fromName) return fromName;
   const name = (animationName ?? "").toLowerCase();
   if (name.startsWith("cc-")) return "compositor";
   if (name.startsWith("blink-") || name.includes("style")) return "layout";
@@ -541,6 +836,8 @@ async function ensureResourceTimingCollector(page) {
             decodedBodySize: e.decodedBodySize ?? 0,
             duration: e.duration ?? 0,
             initiatorType: e.initiatorType ?? "",
+            fetchStart: e.fetchStart ?? 0,
+            responseEnd: e.responseEnd ?? 0,
           })),
           navigation: navEntries.map((e) => ({
             url: e.name,
@@ -548,6 +845,7 @@ async function ensureResourceTimingCollector(page) {
             encodedBodySize: e.encodedBodySize ?? 0,
             decodedBodySize: e.decodedBodySize ?? 0,
             duration: e.duration ?? 0,
+            responseEnd: e.responseEnd ?? e.domContentLoadedEventEnd ?? 0,
           })),
         };
       } catch {}
@@ -598,9 +896,13 @@ async function ensureAnimationPropertyCollector(page) {
             if (kf && typeof kf === "object")
               for (const key of Object.keys(kf))
                 if (
-                  !["offset", "easing", "composite"].includes(
-                    key.toLowerCase()
-                  ) &&
+                  ![
+                    "offset",
+                    "easing",
+                    "composite",
+                    "computedoffset",
+                    "compositeoperation",
+                  ].includes(key.toLowerCase()) &&
                   !props.includes(key)
                 )
                   props.push(key);
@@ -631,7 +933,8 @@ async function ensureAnimationPropertyCollector(page) {
 async function createCaptureSession(
   url,
   cpuThrottle = 1,
-  trackReactRerenders = false
+  trackReactRerenders = false,
+  recordVideo = true
 ) {
   if (activeSession) {
     throw new Error("A recording session is already running.");
@@ -649,22 +952,22 @@ async function createCaptureSession(
   const browser = await chromium.launch(launchOptions);
   const context = await browser.newContext({
     viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-    recordVideo: {
-      dir: videoDir,
-      size: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-    },
+    ...(recordVideo
+      ? {
+          recordVideo: {
+            dir: videoDir,
+            size: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+          },
+        }
+      : {}),
   });
   const page = await context.newPage();
   const traceCdp = await context.newCDPSession(page);
   const metricsCdp = await context.newCDPSession(page);
 
-  const tracePath = path.join(os.tmpdir(), `perftrace-${randomUUID()}.zip`);
-  await context.tracing.start({
-    screenshots: true,
-    snapshots: true,
-    sources: true,
-    title: "PerfTrace Session",
-  });
+  // Do NOT use context.tracing.start() here: Chrome allows one global Tracing session.
+  // Playwright's trace would conflict with our CDP Tracing.start below and yield empty
+  // or wrong GPU/layout/paint data.
 
   await metricsCdp.send("Performance.enable");
   const collectedAnimations = [];
@@ -795,6 +1098,7 @@ async function createCaptureSession(
         taskDuration: metricMap.get("TaskDuration") ?? 0,
         scriptDuration: metricMap.get("ScriptDuration") ?? 0,
         layoutDuration: metricMap.get("LayoutDuration") ?? 0,
+        paintDuration: metricMap.get("PaintDuration") ?? 0,
         jsHeapSize,
         nodes,
       };
@@ -814,6 +1118,9 @@ async function createCaptureSession(
             (totals.layoutDuration - lastTotals.layoutDuration) * 1000
           )
         : 0;
+      const deltaPaint = lastTotals
+        ? Math.max(0, (totals.paintDuration - lastTotals.paintDuration) * 1000)
+        : 0;
       lastPerfTotals = totals;
       const SAMPLE_WINDOW_MS = 1000;
       const cpuPercent = Math.min(
@@ -826,6 +1133,7 @@ async function createCaptureSession(
         cpuPercent,
         scriptMs: deltaScript,
         layoutMs: deltaLayout,
+        paintMs: deltaPaint,
         jsHeapMb: totals.jsHeapSize
           ? totals.jsHeapSize / (1024 * 1024)
           : undefined,
@@ -840,7 +1148,6 @@ async function createCaptureSession(
     page,
     traceCdp,
     metricsCdp,
-    tracePath,
     startedAt: recordingStartMs,
     recordedUrl: safeUrl,
     samples,
@@ -886,7 +1193,7 @@ async function stopCaptureSession() {
     browser,
     context,
     page,
-    tracePath,
+    traceCdp,
     startedAt,
     recordedUrl = null,
     samples,
@@ -940,7 +1247,12 @@ async function stopCaptureSession() {
   let reactRerenderHint = null;
   if (rrtClient) {
     try {
-      const events = (await rrtClient.getEvents()) || [];
+      const events = await Promise.race([
+        rrtClient.getEvents().then((e) => e || []),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("RRT_TIMEOUT")), 12_000)
+        ),
+      ]).catch(() => []);
       const durationMs = Date.now() - startedAt;
       const durationSec = durationMs / 1000;
       const byComponent = new Map();
@@ -982,9 +1294,12 @@ async function stopCaptureSession() {
 
   const stopRequestedAt = Date.now();
 
-  // Stop tracing (writes to tracePath) and close context immediately so the video
-  // stops recording at the moment the user clicked stop. Trace parsing happens after.
-  await context.tracing.stop({ path: tracePath });
+  let cdpTraceText = "";
+  try {
+    cdpTraceText = await readCdpTracingTrace(traceCdp);
+  } catch (e) {
+    console.warn("[PerfTrace] CDP trace read:", e?.message || e);
+  }
 
   const candidates = [];
   const pageVideo = page.video();
@@ -1013,18 +1328,29 @@ async function stopCaptureSession() {
   await context.close().catch(() => {});
   await browser.close().catch(() => {});
 
-  let traceText = "";
-  try {
-    traceText = await readTraceFromZip(tracePath);
-  } catch (err) {
-    console.warn("[PerfTrace] readTraceFromZip failed:", err?.message || err);
+  const traceText = "";
+
+  const traceTextForParser = pickTraceTextForParser(traceText, cdpTraceText);
+  if (!cdpTraceText || cdpTraceText.length < 100) {
+    console.warn(
+      "[PerfTrace] CDP trace short or empty (",
+      cdpTraceText?.length ?? 0,
+      "chars); GPU/layout may be missing"
+    );
+  }
+  if (cdpTraceText && traceTextForParser === cdpTraceText) {
+    console.log(
+      "[PerfTrace] Using CDP Chrome trace for metrics (",
+      parseTraceEvents(cdpTraceText).length,
+      "events)"
+    );
   }
 
   let report;
   try {
     report = await parseTraceToReport(
-      tracePath,
-      traceText,
+      null,
+      traceTextForParser,
       startedAt,
       stopRequestedAt,
       {
@@ -1050,13 +1376,11 @@ async function stopCaptureSession() {
   report.downloadedAssets = buildDownloadedAssetsSummary(
     resourceEntries,
     navigationEntries,
-    networkRequests
+    networkRequests,
+    clientCollector?.fcp
   );
 
-  const mainThreadBlockedMs = report.longTasks.topTasks.reduce(
-    (s, t) => s + Math.max(0, t.durationMs - 50),
-    0
-  );
+  const mainThreadBlockedMs = report.webVitals?.tbtMs ?? 0;
   report.blockingSummary = {
     totalBlockedMs: report.longTasks.totalTimeMs,
     longTaskCount: report.longTasks.count,
@@ -1143,11 +1467,9 @@ async function stopCaptureSession() {
   }
   report.animationMetrics = {
     ...report.animationMetrics,
-    animations: allAnims,
+    animations: normalizeAnimationEntries(allAnims),
     totalAnimations: allAnims.length,
   };
-  await fs.unlink(tracePath).catch(() => {});
-
   return report;
 }
 
@@ -1156,6 +1478,7 @@ function buildFallbackReport(startedAt, stoppedAt, fallback) {
   const { samples, fpsSamples, networkRequests, clientCollector } = fallback;
   const totalScript = samples.reduce((s, x) => s + x.scriptMs, 0);
   const totalLayout = samples.reduce((s, x) => s + x.layoutMs, 0);
+  const totalPaint = samples.reduce((s, x) => s + (x.paintMs ?? 0), 0);
   const tbt =
     clientCollector?.longTasks?.reduce(
       (s, t) => s + Math.max(0, t.duration - 50),
@@ -1170,6 +1493,36 @@ function buildFallbackReport(startedAt, stoppedAt, fallback) {
     (s, r) => s + (r.transferSize ?? 0),
     0
   );
+  const clientLongTasks = clientCollector?.longTasks ?? [];
+  const longTaskTotalMsFb = clientLongTasks.reduce(
+    (s, t) => s + (t.duration ?? 0),
+    0
+  );
+  const maxDurFb =
+    clientLongTasks.length > 0
+      ? Math.max(...clientLongTasks.map((t) => t.duration ?? 0))
+      : 0;
+  const topTasksFb = [...clientLongTasks]
+    .sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0))
+    .slice(0, 5)
+    .map((t) => ({
+      name: "longtask",
+      durationMs: t.duration ?? 0,
+      startSec: (t.start ?? 0) / 1000,
+      attribution: "PerformanceObserver",
+    }));
+  const tbtTimelineFallback = clientLongTasks.map((t) => {
+    const durationMs = t.duration ?? 0;
+    const startSec = (t.start ?? 0) / 1000;
+    const blockingMs = Math.max(0, durationMs - 50);
+    return {
+      startSec,
+      endSec: startSec + durationMs / 1000,
+      durationMs,
+      blockingMs,
+      attribution: "longtask (PerformanceObserver)",
+    };
+  });
 
   return {
     startedAt: new Date(startedAt).toISOString(),
@@ -1203,9 +1556,21 @@ function buildFallbackReport(startedAt, stoppedAt, fallback) {
       layoutCount: 0,
       paintCount: 0,
       layoutTimeMs: totalLayout,
-      paintTimeMs: 0,
+      paintTimeMs: totalPaint,
     },
-    longTasks: { count: 0, totalTimeMs: 0, topTasks: [] },
+    longTasks: {
+      count: clientLongTasks.length,
+      totalTimeMs: longTaskTotalMsFb,
+      topTasks: topTasksFb,
+      tbtTimeline: tbtTimelineFallback,
+    },
+    frameTiming: null,
+    blockingSummary: {
+      totalBlockedMs: longTaskTotalMsFb,
+      longTaskCount: clientLongTasks.length,
+      maxBlockingMs: maxDurFb,
+      mainThreadBlockedMs: tbt,
+    },
     networkSummary: {
       requests: networkRequests.length,
       totalBytes,

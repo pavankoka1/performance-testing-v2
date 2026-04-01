@@ -1,29 +1,32 @@
-# PerfTrace Landing Page
+# PerfTrace marketing site
 
-A compositor-optimized landing page with WebGL raymarched metaballs and an "I'm watching you" eye animation.
+React + Vite single-page landing (WebGL hero, Framer Motion sections). **Download URLs** live in `public/config.js` (`window.PERFTRACE_DOWNLOADS`).
 
-## Setup
+## Develop
 
-1. Serve the `website` folder with any static server, e.g.:
+```bash
+cd website
+npm install
+npm run dev
+```
 
-   ```bash
-   cd website && npx serve .
-   ```
+Open the printed local URL (usually http://localhost:5173).
 
-   Or open `index.html` directly (some features may be limited without a server).
+## Production build
 
-2. After uploading builds to Google Drive, edit `config.js` and replace the placeholder URLs:
-   ```js
-   window.PERFTRACE_DOWNLOADS = {
-     mac: "https://drive.google.com/...",
-     win: "https://drive.google.com/...",
-     linux: "https://drive.google.com/...",
-   };
-   ```
+```bash
+npm run build
+```
 
-## Files
+Output: `dist/` — static HTML + hashed JS/CSS. `public/config.js` is copied to `dist/config.js` unchanged.
 
-- `index.html` — Main page
-- `styles.css` — Styles (transform/opacity only for animations)
-- `main.js` — WebGL background + eye tracking
-- `config.js` — Download URLs (edit after upload)
+## Deploy
+
+From repo root (after `npm install` in `website/` if needed):
+
+```bash
+npm run deploy:website
+npm run deploy:website:perftrace   # legacy Vercel project
+```
+
+`prepare-vercel-output.cjs` runs `vite build` and stages `dist/` for Vercel prebuilt deploy.

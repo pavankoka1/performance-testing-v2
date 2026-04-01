@@ -1,4 +1,25 @@
+import {
+  animationDisplayLabel,
+  effectiveBottleneck,
+  formatAnimationPropertiesForDisplay,
+} from "@/lib/animationUtils";
+import {
+  clsHealth,
+  cpuHealth,
+  domHealth,
+  fcpHealth,
+  fpsHealth,
+  gpuHealth,
+  healthToHtmlClass,
+  heapHealth,
+  latencyHealth,
+  lcpHealth,
+  paintMsHealth,
+  staggerHealth,
+  tbtHealth,
+} from "@/lib/metricHealth";
 import type { PerfReport } from "./reportTypes";
+import { buildTbtSvgString } from "./tbtChartSvg";
 
 const formatNum = (n: number) =>
   new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(n);
@@ -23,31 +44,44 @@ function avg(points: { value: number }[]): number {
   return points.reduce((s, p) => s + p.value, 0) / points.length;
 }
 
+function spanClass(h: ReturnType<typeof fpsHealth>): string {
+  return healthToHtmlClass(h);
+}
+
 export function buildReportHtml(report: PerfReport): string {
   const durationSec = report.durationMs / 1000;
-  const fpsAvg = avg(report.fpsSeries.points);
-  const cpuAvg = avg(report.cpuSeries.points);
-  const gpuAvg = avg(report.gpuSeries.points);
+  const fpsAvg = report.summaryStats?.avgFps ?? avg(report.fpsSeries.points);
+  const cpuAvg = report.summaryStats?.avgCpu ?? avg(report.cpuSeries.points);
+  const gpuAvg = report.summaryStats?.avgGpu ?? avg(report.gpuSeries.points);
   const memMax =
-    report.memorySeries.points.length > 0
+    report.summaryStats?.peakMemMb ??
+    (report.memorySeries.points.length > 0
       ? Math.max(...report.memorySeries.points.map((p) => p.value))
-      : 0;
+      : 0);
   const domMax =
-    report.domNodesSeries.points.length > 0
+    report.summaryStats?.peakDomNodes ??
+    (report.domNodesSeries.points.length > 0
       ? Math.max(...report.domNodesSeries.points.map((p) => p.value))
-      : 0;
+      : 0);
+
+  const tbtTimeline = report.longTasks.tbtTimeline ?? [];
 
   const animRows = (report.animationMetrics?.animations ?? [])
-    .map(
-      (a) =>
-        `<tr>
-          <td>${escapeHtml(a.name || "(unnamed)")}</td>
+    .map((a) => {
+      const label = escapeHtml(animationDisplayLabel(a.name, a.properties));
+      const b = effectiveBottleneck(a);
+      const hint = b ?? "—";
+      const props = escapeHtml(
+        formatAnimationPropertiesForDisplay(a.properties, a.name)
+      );
+      return `<tr>
+          <td>${label}</td>
           <td>${escapeHtml(a.type)}</td>
-          <td>${escapeHtml((a.properties ?? []).join(", ") || "—")}</td>
-          <td>${a.bottleneckHint ?? "—"}</td>
+          <td>${props}</td>
+          <td><span class="bottleneck-${hint === "—" ? "none" : hint}">${escapeHtml(String(hint))}</span></td>
           <td>${a.durationMs != null ? formatNum(a.durationMs) + " ms" : "—"}</td>
-        </tr>`
-    )
+        </tr>`;
+    })
     .join("");
 
   const suggestionRows = (report.suggestions ?? [])
@@ -93,13 +127,21 @@ export function buildReportHtml(report: PerfReport): string {
     "font",
     "other",
   ] as const;
+
   const downloadedAssetsHtml =
     report.downloadedAssets && report.downloadedAssets.totalCount > 0
       ? `
-  <h2>Downloaded files — Build size, scripts, styles, API responses, assets</h2>
-  <p>Total: ${formatBytes(report.downloadedAssets.totalBytes)} (${
-    report.downloadedAssets.totalCount
-  } files)</p>
+  <h2>Downloaded files</h2>
+  <p class="muted">Full session (game build): <strong class="metric-warn">${formatBytes(
+    report.downloadedAssets.sessionTotalBytes ??
+      report.downloadedAssets.totalBytes
+  )}</strong> · ${report.downloadedAssets.totalCount} files${
+    report.downloadedAssets.initialLoadBytes != null
+      ? ` · Initial load (FCP path ~): <strong>${formatBytes(
+          report.downloadedAssets.initialLoadBytes
+        )}</strong>`
+      : ""
+  }</p>
   <div class="grid">
     ${assetCategories
       .map((cat) => {
@@ -110,6 +152,7 @@ export function buildReportHtml(report: PerfReport): string {
       .filter(Boolean)
       .join("")}
   </div>
+  <div class="table-scroll scrollbar">
   <table>
     <thead><tr><th>Category</th><th>URL</th><th>Size</th></tr></thead>
     <tbody>
@@ -117,28 +160,50 @@ export function buildReportHtml(report: PerfReport): string {
         .flatMap((cat) => {
           const data = report.downloadedAssets!.byCategory[cat];
           if (!data || data.files.length === 0) return [];
-          return data.files
-            .slice(0, 20)
-            .map(
-              (f) =>
-                `<tr><td>${escapeHtml(assetLabels[cat] ?? cat)}</td><td class="url-cell">${escapeHtml(f.url)}</td><td>${f.transferSize != null ? formatBytes(f.transferSize) : "—"}</td></tr>`
-            );
+          return data.files.map(
+            (f) =>
+              `<tr><td>${escapeHtml(assetLabels[cat] ?? cat)}</td><td class="url-cell">${escapeHtml(f.url)}</td><td>${f.transferSize != null ? formatBytes(f.transferSize) : "—"}</td></tr>`
+          );
         })
         .join("")}
     </tbody>
-  </table>`
+  </table>
+  </div>`
       : "";
 
   const blockingHtml =
-    report.blockingSummary && report.blockingSummary.longTaskCount > 0
+    report.blockingSummary &&
+    (report.blockingSummary.longTaskCount > 0 || report.webVitals.tbtMs > 0)
       ? `
   <h2>Main thread blocking</h2>
-  <p>Long tasks: ${report.blockingSummary.longTaskCount} | Total blocked: ${formatNum(
+  <p>Long tasks: ${report.blockingSummary.longTaskCount} · Sum of durations: ${formatNum(
     report.blockingSummary.totalBlockedMs
-  )} ms | Main thread blocked (TBT): ${formatNum(
+  )} ms · TBT: <span class="${spanClass(tbtHealth(report.webVitals.tbtMs))}">${formatNum(
     report.blockingSummary.mainThreadBlockedMs
-  )} ms | Longest: ${formatNum(report.blockingSummary.maxBlockingMs)} ms</p>`
+  )} ms</span> · Longest: ${formatNum(
+    report.blockingSummary.maxBlockingMs
+  )} ms</p>`
       : "";
+
+  const tbtChartHtml =
+    tbtTimeline.length > 0
+      ? `<h3>TBT timeline (blocking ms per long task)</h3>${buildTbtSvgString(
+          tbtTimeline,
+          durationSec
+        )}`
+      : `<p class="muted">No TBT timeline entries (no &gt;50ms tasks or trace unavailable).</p>`;
+
+  const frameTimingHtml = report.frameTiming
+    ? `
+  <h2>Frame pacing (jank signal)</h2>
+  <p>From trace DrawFrame spacing — useful when FPS looks similar but motion feels uneven.</p>
+  <div class="grid">
+    <div class="card"><span class="card-label">Stagger risk</span><div class="card-value ${spanClass(staggerHealth(report.frameTiming.staggerRisk))}">${report.frameTiming.staggerRisk}</div></div>
+    <div class="card"><span class="card-label">Avg frame Δ</span><div class="card-value">${formatNum(report.frameTiming.avgFrameMs)} ms</div></div>
+    <div class="card"><span class="card-label">σ frame Δ</span><div class="card-value">${formatNum(report.frameTiming.stdDevDeltaMs)} ms</div></div>
+    <div class="card"><span class="card-label">Max frame Δ</span><div class="card-value">${formatNum(report.frameTiming.maxDeltaMs)} ms</div></div>
+  </div>`
+    : "";
 
   const networkRows = report.networkRequests
     .slice(0, 100)
@@ -163,6 +228,7 @@ export function buildReportHtml(report: PerfReport): string {
   <p>${report.developerHints.reactRerenders.totalEvents} events across ${
     report.developerHints.reactRerenders.components.length
   } components</p>
+  <div class="table-scroll scrollbar">
   <table>
     <thead><tr><th>Component</th><th>Re-renders</th><th>In bursts</th></tr></thead>
     <tbody>
@@ -176,7 +242,8 @@ export function buildReportHtml(report: PerfReport): string {
         )
         .join("")}
     </tbody>
-  </table>`
+  </table>
+  </div>`
       : "";
 
   const spikeFramesHtml =
@@ -201,29 +268,58 @@ export function buildReportHtml(report: PerfReport): string {
     new Date(report.startedAt).toLocaleString()
   )}</title>
   <style>
-    :root { --bg: #0c0c0f; --fg: #f4f4f5; --muted: #a1a1aa; --accent: #8b5cf6; --border: rgba(255,255,255,0.08); }
+    :root {
+      --bg: #08080b;
+      --fg: #fafafa;
+      --muted: #a1a1aa;
+      --accent: #8b5cf6;
+      --border: rgba(255,255,255,0.08);
+      --good: #34d399;
+      --warn: #fbbf24;
+      --bad: #fb7185;
+    }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 2rem; line-height: 1.6; max-width: 1000px; }
+    html { scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.45) rgba(255,255,255,0.06); }
+    *::-webkit-scrollbar { width: 9px; height: 9px; }
+    *::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 6px; }
+    *::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(139,92,246,0.55), rgba(124,58,237,0.45));
+      border-radius: 6px;
+    }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 2rem; line-height: 1.6; max-width: 1100px; }
     h1 { font-size: 1.75rem; margin: 0 0 0.5rem; background: linear-gradient(135deg,#6d28d9,#a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     h2 { font-size: 1.25rem; margin: 1.5rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1rem; margin: 1rem 0 0.5rem; color: var(--muted); }
     p { margin: 0.5rem 0; color: var(--muted); }
     .muted { color: var(--muted); font-size: 0.875rem; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    .table-scroll { overflow-x: auto; max-width: 100%; margin: 0.75rem 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; min-width: 520px; }
     th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin: 1rem 0; }
-    .card { background: #141418; border: 1px solid var(--border); border-radius: 0.75rem; padding: 1rem; }
+    .card { background: #111114; border: 1px solid var(--border); border-radius: 0.75rem; padding: 1rem; }
     .card-label { font-size: 0.7rem; text-transform: uppercase; color: var(--muted); }
-    .card-value { font-size: 1.5rem; font-weight: 600; color: var(--accent); }
+    .card-value { font-size: 1.35rem; font-weight: 600; color: var(--accent); }
+    .card-val .lbl { display: block; font-size: 0.7rem; text-transform: uppercase; color: var(--muted); margin-bottom: 0.35rem; }
+    .metric-good { color: var(--good) !important; }
+    .metric-warn { color: var(--warn) !important; }
+    .metric-bad { color: var(--bad) !important; }
+    .metric-good.card-val { border-color: rgba(52,211,153,0.25); }
+    .card-val { border: 1px solid var(--border); border-radius: 0.75rem; padding: 0.75rem 1rem; background: rgba(255,255,255,0.02); }
     .badge { padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; }
     .badge-warning { background: rgba(245,158,11,0.2); color: #f59e0b; }
     .badge-info { background: rgba(59,130,246,0.2); color: #3b82f6; }
     .badge-critical { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .bottleneck-compositor { color: #34d399; font-weight: 600; }
+    .bottleneck-paint { color: #fbbf24; font-weight: 600; }
+    .bottleneck-layout { color: #f87171; font-weight: 600; }
+    .bottleneck-none { color: #94a3b8; }
     .spike-frames { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
-    .spike-frame { flex: 1 1 180px; background: #141418; border-radius: 0.5rem; overflow: hidden; border: 1px solid var(--border); }
+    .spike-frame { flex: 1 1 180px; background: #111114; border-radius: 0.5rem; overflow: hidden; border: 1px solid var(--border); }
     .spike-frame img { width: 100%; height: auto; display: block; }
     .spike-frame p { padding: 0.5rem; margin: 0; font-size: 0.75rem; }
     .url-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tbt-figure { margin: 0.5rem 0 1rem; }
   </style>
 </head>
 <body>
@@ -243,49 +339,30 @@ export function buildReportHtml(report: PerfReport): string {
 
   <h2>Summary</h2>
   <div class="grid">
-    <div class="card"><span class="card-label">Avg FPS</span><div class="card-value">${formatNum(
-      fpsAvg
-    )}</div></div>
-    <div class="card"><span class="card-label">Avg CPU</span><div class="card-value">${formatNum(
-      cpuAvg
-    )}%</div></div>
-    <div class="card"><span class="card-label">Avg GPU</span><div class="card-value">${formatNum(
-      gpuAvg
-    )}%${report.gpuEstimated ? " *" : ""}</div></div>
-    <div class="card"><span class="card-label">Peak heap</span><div class="card-value">${formatNum(
-      memMax
-    )} MB</div></div>
-    <div class="card"><span class="card-label">Peak DOM nodes</span><div class="card-value">${formatNum(
-      domMax
-    )}</div></div>
-    <div class="card"><span class="card-label">TBT</span><div class="card-value">${formatNum(
-      report.webVitals.tbtMs
-    )} ms</div></div>
-    <div class="card"><span class="card-label">Long tasks</span><div class="card-value">${
-      report.webVitals.longTaskCount
-    }</div></div>
-    <div class="card"><span class="card-label">FCP</span><div class="card-value">${
-      report.webVitals.fcpMs != null
-        ? formatNum(report.webVitals.fcpMs) + " ms"
-        : "—"
-    }</div></div>
-    <div class="card"><span class="card-label">LCP</span><div class="card-value">${
-      report.webVitals.lcpMs != null
-        ? formatNum(report.webVitals.lcpMs) + " ms"
-        : "—"
-    }</div></div>
-    <div class="card"><span class="card-label">CLS</span><div class="card-value">${
-      report.webVitals.cls != null ? formatNum(report.webVitals.cls) : "—"
-    }</div></div>
+    <div class="card-val"><span class="lbl">Avg FPS</span><div class="card-value ${spanClass(fpsHealth(fpsAvg))}">${formatNum(fpsAvg)}</div></div>
+    <div class="card-val"><span class="lbl">Avg CPU</span><div class="card-value ${spanClass(cpuHealth(cpuAvg))}">${formatNum(cpuAvg)}%</div></div>
+    <div class="card-val"><span class="lbl">Avg GPU</span><div class="card-value ${spanClass(gpuHealth(gpuAvg))}">${formatNum(gpuAvg)}%${report.gpuEstimated ? " *" : ""}</div></div>
+    <div class="card-val"><span class="lbl">Peak heap</span><div class="card-value ${spanClass(heapHealth(memMax))}">${formatNum(memMax)} MB</div></div>
+    <div class="card-val"><span class="lbl">Peak DOM</span><div class="card-value ${spanClass(domHealth(domMax))}">${formatNum(domMax)}</div></div>
+    <div class="card-val"><span class="lbl">TBT</span><div class="card-value ${spanClass(tbtHealth(report.webVitals.tbtMs))}">${formatNum(report.webVitals.tbtMs)} ms</div></div>
+    <div class="card-val"><span class="lbl">Long tasks</span><div class="card-value">${report.webVitals.longTaskCount}</div></div>
+    <div class="card-val"><span class="lbl">FCP</span><div class="card-value ${report.webVitals.fcpMs != null ? spanClass(fcpHealth(report.webVitals.fcpMs)!) : ""}">${report.webVitals.fcpMs != null ? formatNum(report.webVitals.fcpMs) + " ms" : "—"}</div></div>
+    <div class="card-val"><span class="lbl">LCP</span><div class="card-value ${report.webVitals.lcpMs != null ? spanClass(lcpHealth(report.webVitals.lcpMs)!) : ""}">${report.webVitals.lcpMs != null ? formatNum(report.webVitals.lcpMs) + " ms" : "—"}</div></div>
+    <div class="card-val"><span class="lbl">CLS</span><div class="card-value ${report.webVitals.cls != null ? spanClass(clsHealth(report.webVitals.cls)) : ""}">${report.webVitals.cls != null ? formatNum(report.webVitals.cls) : "—"}</div></div>
+    <div class="card-val"><span class="lbl">Avg latency</span><div class="card-value ${spanClass(latencyHealth(report.networkSummary.averageLatencyMs))}">${formatNum(report.networkSummary.averageLatencyMs)} ms</div></div>
   </div>
   ${report.gpuEstimated ? '<p class="muted">* GPU estimated from raster+composite (no GPU trace events)</p>' : ""}
 
-  <h2>Layout & Paint</h2>
+  ${frameTimingHtml}
+
+  <h2>Layout &amp; paint</h2>
   <p>Layouts: ${report.layoutMetrics.layoutCount} | Paints: ${
     report.layoutMetrics.paintCount
-  } | Layout time: ${formatNum(
+  } | Layout time: <span class="${spanClass(paintMsHealth(report.layoutMetrics.layoutTimeMs))}">${formatNum(
     report.layoutMetrics.layoutTimeMs
-  )} ms | Paint time: ${formatNum(report.layoutMetrics.paintTimeMs)} ms</p>
+  )} ms</span> | Paint time: <span class="${spanClass(paintMsHealth(report.layoutMetrics.paintTimeMs))}">${formatNum(
+    report.layoutMetrics.paintTimeMs
+  )} ms</span></p>
 
   <h2>Render breakdown</h2>
   <p>Script: ${formatNum(
@@ -298,51 +375,65 @@ export function buildReportHtml(report: PerfReport): string {
 
   ${blockingHtml}
 
+  <h2>Total blocking time (TBT)</h2>
+  ${tbtChartHtml}
+
   ${downloadedAssetsHtml}
 
   <h2>Network</h2>
   <p>Requests: ${report.networkSummary.requests} | Total: ${formatBytes(
     report.networkSummary.totalBytes
-  )} | Avg latency: ${formatNum(report.networkSummary.averageLatencyMs)} ms</p>
+  )} | Avg latency: <span class="${spanClass(latencyHealth(report.networkSummary.averageLatencyMs))}">${formatNum(
+    report.networkSummary.averageLatencyMs
+  )} ms</span></p>
 
   <h2>Web Vitals</h2>
   <p>FCP: ${
     report.webVitals.fcpMs != null
-      ? formatNum(report.webVitals.fcpMs) + " ms"
+      ? `<span class="${spanClass(fcpHealth(report.webVitals.fcpMs)!)}">${formatNum(report.webVitals.fcpMs)} ms</span>`
       : "—"
   } | LCP: ${
     report.webVitals.lcpMs != null
-      ? formatNum(report.webVitals.lcpMs) + " ms"
+      ? `<span class="${spanClass(lcpHealth(report.webVitals.lcpMs)!)}">${formatNum(report.webVitals.lcpMs)} ms</span>`
       : "—"
   } | CLS: ${
-    report.webVitals.cls != null ? formatNum(report.webVitals.cls) : "—"
-  } | TBT: ${formatNum(report.webVitals.tbtMs)} ms | Long tasks: ${
-    report.webVitals.longTaskCount
-  }</p>
+    report.webVitals.cls != null
+      ? `<span class="${spanClass(clsHealth(report.webVitals.cls))}">${formatNum(report.webVitals.cls)}</span>`
+      : "—"
+  } | TBT: <span class="${spanClass(tbtHealth(report.webVitals.tbtMs))}">${formatNum(
+    report.webVitals.tbtMs
+  )} ms</span> | Long tasks: ${report.webVitals.longTaskCount}</p>
 
-  <h2>Animations & properties</h2>
+  <h2>Animations &amp; properties</h2>
+  <p class="muted" style="margin-bottom:1rem"><strong>Legend:</strong> <span class="bottleneck-compositor">Compositor</span> — GPU layer (typically <code>transform</code>, <code>opacity</code>). <span class="bottleneck-paint">Paint</span> — raster (colors, shadows, <code>border-*-radius</code>, filters). <span class="bottleneck-layout">Layout</span> — reflow (<code>width</code>, <code>height</code>, margins, flex/grid, font size…). Metadata keys like <code>computedOffset</code> are omitted from the property list.</p>
+  <div class="table-scroll scrollbar">
   <table>
     <thead><tr><th>Name</th><th>Type</th><th>Properties</th><th>Bottleneck</th><th>Duration</th></tr></thead>
     <tbody>${
       animRows || "<tr><td colspan='5'>No animations captured.</td></tr>"
     }</tbody>
   </table>
+  </div>
 
-  <h2>Long tasks</h2>
+  <h2>Long tasks (top)</h2>
+  <div class="table-scroll scrollbar">
   <table>
     <thead><tr><th>Task</th><th>Duration</th><th>Start (s)</th><th>Attribution</th></tr></thead>
     <tbody>${
       longTaskRows || "<tr><td colspan='4'>No long tasks.</td></tr>"
     }</tbody>
   </table>
+  </div>
 
   <h2>Network requests</h2>
+  <div class="table-scroll scrollbar">
   <table>
     <thead><tr><th>URL</th><th>Method</th><th>Status</th><th>Type</th><th>Size</th><th>Duration</th></tr></thead>
     <tbody>${
       networkRows || "<tr><td colspan='6'>No requests.</td></tr>"
     }</tbody>
   </table>
+  </div>
 
   <h2>Suggestions</h2>
   <table>

@@ -2,190 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PerfTrace — Self-Hosted Performance Testing</title>
     <meta
       name="description"
-      content="Record real browser sessions, capture CDP traces, and get detailed performance reports. FPS, CPU, GPU, Web Vitals, React rerenders — all in one desktop app."
+      content="PerfTrace — self-hosted performance lab. Real Chromium, CDP traces, FPS, Web Vitals, bundle intel, CPU throttling, and rich reports in one desktop app."
     />
+    <title>PerfTrace — Self-Hosted Performance Lab</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;1,400&family=Outfit:wght@300;400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css" />
+    <script src="/config.js"></script>
   </head>
   <body>
-    <!-- WebGL background - compositor layer -->
-    <div class="webgl-wrap" aria-hidden="true">
-      <canvas id="webgl-canvas"></canvas>
-    </div>
-
-    <!-- "I'm watching you" eye - compositor layer -->
-    <div class="eye-wrap" aria-hidden="true">
-      <div class="eye-container">
-        <svg
-          class="eye-svg"
-          viewBox="0 0 120 60"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <defs>
-            <linearGradient id="eyeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" style="stop-color: #00d4aa" />
-              <stop offset="100%" style="stop-color: #00a8ff" />
-            </linearGradient>
-            <filter id="eyeGlow">
-              <feGaussianBlur stdDeviation="2" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-          <ellipse
-            class="eye-outer"
-            cx="60"
-            cy="30"
-            rx="50"
-            ry="25"
-            fill="url(#eyeGrad)"
-            filter="url(#eyeGlow)"
-          />
-          <ellipse
-            class="eye-inner"
-            cx="60"
-            cy="30"
-            rx="8"
-            ry="8"
-            fill="#0a0a0f"
-          />
-          <ellipse
-            class="eye-pupil"
-            cx="60"
-            cy="30"
-            rx="4"
-            ry="4"
-            fill="#fff"
-          />
-        </svg>
-        <span class="eye-label">👁 watching</span>
-      </div>
-    </div>
-
-    <main class="content">
-      <header class="hero">
-        <h1 class="hero-title">
-          <span class="hero-brand">PerfTrace</span>
-          <span class="hero-tagline">Self-Hosted Performance Testing</span>
-        </h1>
-        <p class="hero-desc">
-          Record real browser sessions, capture CDP traces, and get detailed
-          performance reports. FPS, CPU, GPU, Web Vitals, React rerenders — all
-          in one desktop app.
-        </p>
-        <div class="download-buttons">
-          <a
-            id="download-mac"
-            href="#"
-            class="btn btn-download"
-            data-platform="mac"
-          >
-            <span class="btn-icon">🍎</span>
-            <span>Download for Mac</span>
-          </a>
-          <a
-            id="download-win"
-            href="#"
-            class="btn btn-download"
-            data-platform="win"
-          >
-            <span class="btn-icon">🪟</span>
-            <span>Download for Windows</span>
-          </a>
-          <a
-            id="download-linux"
-            href="#"
-            class="btn btn-download"
-            data-platform="linux"
-          >
-            <span class="btn-icon">🐧</span>
-            <span>Download for Linux</span>
-          </a>
-        </div>
-        <p class="download-hint">
-          <!-- Replace href values below with your Google Drive links after upload -->
-          Mac: .dmg or .zip · Windows: .zip · Linux: .zip
-        </p>
-      </header>
-
-      <section class="section features">
-        <h2 class="section-title">What it does</h2>
-        <div class="feature-grid">
-          <article class="feature-card">
-            <div class="feature-icon">🎬</div>
-            <h3>Record & Replay</h3>
-            <p>
-              Enter a URL, start recording. PerfTrace launches a real Chromium
-              instance, records your session with CDP tracing, and streams it
-              via optional VNC.
-            </p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon">📊</div>
-            <h3>Rich Metrics</h3>
-            <p>
-              FPS, CPU, GPU, JS heap, DOM nodes, layout/paint, long tasks, Web
-              Vitals (FCP, LCP, CLS, TBT), and React rerender tracking — all in
-              one report.
-            </p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon">🖥️</div>
-            <h3>Desktop App</h3>
-            <p>
-              Electron app with bundled Chromium. Works offline, no cloud
-              required. Mac (universal), Windows, and Linux.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section how">
-        <h2 class="section-title">How it works</h2>
-        <ol class="steps">
-          <li class="step">
-            <span class="step-num">1</span>
-            <span
-              >Enter a URL and optionally enable React rerender tracking.</span
-            >
-          </li>
-          <li class="step">
-            <span class="step-num">2</span>
-            <span
-              >Start recording — Chromium launches and loads your page.</span
-            >
-          </li>
-          <li class="step">
-            <span class="step-num">3</span>
-            <span
-              >Interact with the page. Watch live metrics or the VNC
-              stream.</span
-            >
-          </li>
-          <li class="step">
-            <span class="step-num">4</span>
-            <span>Stop recording and get a detailed performance report.</span>
-          </li>
-        </ol>
-      </section>
-
-      <footer class="footer">
-        <p>PerfTrace · Self-hosted · No cloud · Your data stays yours</p>
-      </footer>
-    </main>
-
-    <script src="config.js"></script>
-    <script src="main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

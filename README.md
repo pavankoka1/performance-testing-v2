@@ -70,12 +70,12 @@ PORT=3000 npm start
 
 ## API Endpoints
 
-| Method | Path         | Description                                                           |
-| ------ | ------------ | --------------------------------------------------------------------- |
-| POST   | /api/start   | Start recording (body: `{ url, cpuThrottle?, trackReactRerenders? }`) |
-| POST   | /api/stop    | Stop recording, return report                                         |
-| GET    | /api/metrics | Live metrics during recording                                         |
-| GET    | /api/video   | Session video (WebM)                                                  |
+| Method | Path         | Description                                                                                                           |
+| ------ | ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| POST   | /api/start   | Start recording (body: `{ url, cpuThrottle?, trackReactRerenders?, recordVideo? }`; `recordVideo` defaults to `true`) |
+| POST   | /api/stop    | Stop recording, return report                                                                                         |
+| GET    | /api/metrics | Live metrics during recording                                                                                         |
+| GET    | /api/video   | Session video (WebM)                                                                                                  |
 
 ## Environment Variables
 
@@ -95,6 +95,16 @@ Example deployment on a $6/month DigitalOcean droplet:
 3. Add HTTPS with Certbot
 4. Set `VNC_ENABLED=true` and `PUBLIC_URL=https://your-domain.com`
 5. Install xvfb, x11vnc, websockify
+
+## Marketing website (`website/`)
+
+React + Vite landing page (see `website/README.md`). Local preview:
+
+```bash
+cd website && npm install && npm run dev
+```
+
+Deploy: `npm run deploy:website` (builds `website/` then pushes to Vercel). Edit download URLs in **`website/public/config.js`**.
 
 ## Design
 
@@ -148,13 +158,10 @@ All builds work from macOS without Mono, Wine, or Linux packaging tools.
 
 **Chromium is bundled** — The packaged app includes Playwright Chromium (~250MB). Recipients do not need to install anything. Share the `.dmg` (macOS) or `.zip` (Windows/Linux) via USB, email, or file share.
 
-**macOS Gatekeeper** — If recipients see "PerfTrace cannot be opened because it is from an unidentified developer":
+**macOS: "App blocked" or "malware" warning** — Unsigned builds trigger Gatekeeper. See **[docs/INSTALL-MAC.md](docs/INSTALL-MAC.md)** for:
 
-1. Right-click (or Control+click) the app
-2. Choose **Open**
-3. Click **Open** in the dialog
-
-Alternatively: System Settings → Privacy & Security → scroll to the app → click **Open Anyway**.
+- **End users**: Right-click → Open (first launch), or use Privacy & Security settings
+- **Distributors**: Sign & notarize with Apple Developer account — then users install like any other app
 
 **Architecture note** — Universal macOS builds include Chromium for your Mac's architecture. Built on Apple Silicon → works on M1/M2/M3/M4. Built on Intel → works on Intel Macs. For best compatibility, build on the target architecture or use `npm run electron:make` (single-arch) instead of universal.
 

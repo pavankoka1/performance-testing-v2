@@ -1,4 +1,12 @@
-import { Activity, ChevronDown, Cpu, Layers, Monitor } from "lucide-react";
+import type { RecordingStartOptions } from "@/hooks/useRecording";
+import {
+  Activity,
+  ChevronDown,
+  Cpu,
+  Layers,
+  Monitor,
+  Video,
+} from "lucide-react";
 import { memo, useCallback, useState } from "react";
 import { toast } from "react-hot-toast";
 import LiveMetricsPanel from "./LiveMetricsPanel";
@@ -21,7 +29,11 @@ type RecordFormSectionProps = {
   isRecording: boolean;
   isProcessing: boolean;
   streamUrl: string | null;
-  onStart: (url: string, cpuThrottle: CpuThrottle) => void;
+  onStart: (
+    url: string,
+    cpuThrottle: CpuThrottle,
+    options?: RecordingStartOptions
+  ) => void;
   onStop: () => void;
 };
 
@@ -34,14 +46,19 @@ function RecordFormSectionInner({
 }: RecordFormSectionProps) {
   const [url, setUrl] = useState("https://gpu-vs-cpu-animations.vercel.app/");
   const [cpuThrottle, setCpuThrottle] = useState<CpuThrottle>(20);
+  const [recordVideo, setRecordVideo] = useState(true);
+  const [trackReactRerenders, setTrackReactRerenders] = useState(false);
 
   const handleStart = useCallback(() => {
     if (!isValidUrl(url)) {
       toast.error("Enter a valid URL starting with http:// or https://");
       return;
     }
-    onStart(url, cpuThrottle);
-  }, [url, cpuThrottle, onStart]);
+    onStart(url, cpuThrottle, {
+      recordVideo,
+      trackReactRerenders,
+    });
+  }, [url, cpuThrottle, onStart, recordVideo, trackReactRerenders]);
 
   return (
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--glow)]">
@@ -74,20 +91,43 @@ function RecordFormSectionInner({
           </div>
         </div>
         <label
-          className="flex cursor-not-allowed items-center gap-2 text-sm text-[var(--fg)] opacity-60"
-          title="Disabled for now"
+          className={`flex items-center gap-2 text-sm text-[var(--fg)] ${
+            isRecording || isProcessing
+              ? "cursor-not-allowed opacity-60"
+              : "cursor-pointer"
+          }`}
         >
           <input
             type="checkbox"
-            checked={false}
-            onChange={() => {}}
-            disabled
+            checked={recordVideo}
+            onChange={(e) => setRecordVideo(e.target.checked)}
+            disabled={isRecording || isProcessing}
+            className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
+          />
+          <Video className="h-4 w-4 text-[var(--accent)]" />
+          <span>Record session video</span>
+          <span className="text-xs text-[var(--fg-muted)]">
+            (off for long runs)
+          </span>
+        </label>
+        <label
+          className={`flex items-center gap-2 text-sm text-[var(--fg)] ${
+            isRecording || isProcessing
+              ? "cursor-not-allowed opacity-60"
+              : "cursor-pointer"
+          }`}
+        >
+          <input
+            type="checkbox"
+            checked={trackReactRerenders}
+            onChange={(e) => setTrackReactRerenders(e.target.checked)}
+            disabled={isRecording || isProcessing}
             className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
           />
           <Layers className="h-4 w-4 text-[var(--accent)]" />
           <span>Track React re-renders</span>
           <span className="text-xs text-[var(--fg-muted)]">
-            (disabled for now)
+            (react-render-tracker; stop may take longer)
           </span>
         </label>
         <RecordButtons

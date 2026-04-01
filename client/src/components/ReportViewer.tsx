@@ -1,3 +1,21 @@
+import {
+  clsHealth,
+  cpuHealth,
+  domHealth,
+  fcpHealth,
+  fpsHealth,
+  gpuHealth,
+  healthToBgClass,
+  healthToBorderClass,
+  healthToTextClass,
+  heapHealth,
+  latencyHealth,
+  lcpHealth,
+  paintMsHealth,
+  staggerHealth,
+  tbtHealth,
+  type MetricHealth,
+} from "@/lib/metricHealth";
 import { downloadReportHtml } from "@/lib/reportExport";
 import type { PerfReport } from "@/lib/reportTypes";
 import {
@@ -12,10 +30,13 @@ import {
   ZapOff,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
+import AnimationLayersHelpModal from "./AnimationLayersHelpModal";
 import AnimationTimeline from "./AnimationTimeline";
+import DownloadedAssetsModal from "./DownloadedAssetsModal";
 import GraphModal from "./GraphModal";
 import MetricChart from "./MetricChart";
 import ReactRerendersSection from "./ReactRerendersSection";
+import TbtTimelineChart from "./TbtTimelineChart";
 
 type ReportViewerProps = {
   report: PerfReport | null;
@@ -39,10 +60,35 @@ const formatBytes = (value: number) => {
   return `${formatNumber(value / 1024 ** index)} ${units[index]}`;
 };
 
+function SummaryStatCard({
+  label,
+  value,
+  health,
+}: {
+  label: string;
+  value: string;
+  health: MetricHealth;
+}) {
+  return (
+    <div
+      className={`rounded-xl border px-4 py-3 ${healthToBorderClass(health)} ${healthToBgClass(health)}`}
+    >
+      <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
+        {label}
+      </p>
+      <p className={`text-lg font-semibold ${healthToTextClass(health)}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
 function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [reportTimeSec, setReportTimeSec] = useState(0);
   const [graphModal, setGraphModal] = useState<GraphModalState>(null);
+  const [assetsModalOpen, setAssetsModalOpen] = useState(false);
+  const [animationLayersHelpOpen, setAnimationLayersHelpOpen] = useState(false);
 
   const durationSec = report ? report.durationMs / 1000 : 0;
 
@@ -121,69 +167,85 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
           <div className="rounded-full border border-[var(--border)] px-3 py-1">
             Requests: {report.networkSummary.requests}
           </div>
-          <div className="rounded-full border border-[var(--border)] px-3 py-1">
-            Avg latency: {formatNumber(report.networkSummary.averageLatencyMs)}{" "}
-            ms
+          <div
+            className={`rounded-full border px-3 py-1 ${healthToBorderClass(latencyHealth(report.networkSummary.averageLatencyMs))} ${healthToBgClass(latencyHealth(report.networkSummary.averageLatencyMs))}`}
+          >
+            <span
+              className={healthToTextClass(
+                latencyHealth(report.networkSummary.averageLatencyMs)
+              )}
+            >
+              Avg latency:{" "}
+              {formatNumber(report.networkSummary.averageLatencyMs)} ms
+            </span>
           </div>
-          <div className="rounded-full border border-[var(--border)] px-3 py-1">
+          <div className="rounded-full border border-[var(--border)] px-3 py-1 text-[var(--fg-muted)]">
             Transfer: {formatBytes(report.networkSummary.totalBytes)}
           </div>
+          {report.downloadedAssets &&
+            report.downloadedAssets.totalCount > 0 && (
+              <>
+                {report.downloadedAssets.initialLoadBytes != null && (
+                  <div className="rounded-full border border-[var(--border)] px-3 py-1 text-[var(--fg-muted)]">
+                    Initial load ~{" "}
+                    {formatBytes(report.downloadedAssets.initialLoadBytes)}
+                  </div>
+                )}
+                <div className="rounded-full border border-[var(--accent)]/30 bg-[var(--accent-dim)] px-3 py-1 text-[var(--accent)]">
+                  Full session build:{" "}
+                  {formatBytes(
+                    report.downloadedAssets.sessionTotalBytes ??
+                      report.downloadedAssets.totalBytes
+                  )}
+                </div>
+              </>
+            )}
         </div>
       </div>
 
       {report.summaryStats && (
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
-              Avg FPS
-            </p>
-            <p className="text-lg font-semibold text-[var(--accent)]">
-              {formatNumber(report.summaryStats.avgFps)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
-              Avg CPU
-            </p>
-            <p className="text-lg font-semibold text-[var(--accent)]">
-              {formatNumber(report.summaryStats.avgCpu)}%
-            </p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
-              Avg GPU
-            </p>
-            <p className="text-lg font-semibold text-[var(--accent)]">
-              {formatNumber(report.summaryStats.avgGpu)}%
-            </p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
-              Peak heap
-            </p>
-            <p className="text-lg font-semibold text-[var(--accent)]">
-              {formatNumber(report.summaryStats.peakMemMb)} MB
-            </p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-3">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--fg-muted)]">
-              Peak DOM
-            </p>
-            <p className="text-lg font-semibold text-[var(--accent)]">
-              {formatNumber(report.summaryStats.peakDomNodes)}
-            </p>
-          </div>
+          <SummaryStatCard
+            label="Avg FPS"
+            value={formatNumber(report.summaryStats.avgFps)}
+            health={fpsHealth(report.summaryStats.avgFps)}
+          />
+          <SummaryStatCard
+            label="Avg CPU"
+            value={`${formatNumber(report.summaryStats.avgCpu)}%`}
+            health={cpuHealth(report.summaryStats.avgCpu)}
+          />
+          <SummaryStatCard
+            label="Avg GPU"
+            value={`${formatNumber(report.summaryStats.avgGpu)}%`}
+            health={gpuHealth(report.summaryStats.avgGpu)}
+          />
+          <SummaryStatCard
+            label="Peak heap"
+            value={`${formatNumber(report.summaryStats.peakMemMb)} MB`}
+            health={heapHealth(report.summaryStats.peakMemMb)}
+          />
+          <SummaryStatCard
+            label="Peak DOM"
+            value={formatNumber(report.summaryStats.peakDomNodes)}
+            health={domHealth(report.summaryStats.peakDomNodes)}
+          />
           {report.blockingSummary &&
-            report.blockingSummary.longTaskCount > 0 && (
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-                <p className="text-[10px] uppercase tracking-wider text-amber-400/80">
-                  Main thread blocked
-                </p>
-                <p className="text-lg font-semibold text-amber-400">
-                  {formatNumber(report.blockingSummary.mainThreadBlockedMs)} ms
-                </p>
-              </div>
+            (report.blockingSummary.longTaskCount > 0 ||
+              report.webVitals.tbtMs > 0) && (
+              <SummaryStatCard
+                label="TBT (main-thread)"
+                value={`${formatNumber(report.blockingSummary.mainThreadBlockedMs)} ms`}
+                health={tbtHealth(report.webVitals.tbtMs)}
+              />
             )}
+          {report.frameTiming && (
+            <SummaryStatCard
+              label="Frame pacing risk"
+              value={report.frameTiming.staggerRisk}
+              health={staggerHealth(report.frameTiming.staggerRisk)}
+            />
+          )}
         </div>
       )}
 
@@ -310,14 +372,28 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
 
       {(report.animationMetrics?.animations?.length ?? 0) > 0 && (
         <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
-          <h3 className="mb-4 text-sm font-semibold text-[var(--fg)]">
-            Animations & properties — timeline
-          </h3>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-[var(--fg)]">
+              Animations & properties — timeline
+            </h3>
+            <button
+              type="button"
+              onClick={() => setAnimationLayersHelpOpen(true)}
+              className="shrink-0 rounded-full border border-[var(--accent)]/35 bg-[var(--accent-dim)] px-3 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:bg-[var(--accent)]/15"
+            >
+              Compositor vs paint vs layout
+            </button>
+          </div>
           <AnimationTimeline
             animations={report.animationMetrics.animations}
             durationSec={durationSec}
             formatNumber={formatNumber}
           />
+          {animationLayersHelpOpen && (
+            <AnimationLayersHelpModal
+              onClose={() => setAnimationLayersHelpOpen(false)}
+            />
+          )}
         </div>
       )}
 
@@ -368,10 +444,24 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
             <p>Layouts: {report.layoutMetrics.layoutCount}</p>
             <p>Paints: {report.layoutMetrics.paintCount}</p>
             <p>
-              Layout time: {formatNumber(report.layoutMetrics.layoutTimeMs)}ms
+              Layout time:{" "}
+              <span
+                className={healthToTextClass(
+                  paintMsHealth(report.layoutMetrics.layoutTimeMs)
+                )}
+              >
+                {formatNumber(report.layoutMetrics.layoutTimeMs)}ms
+              </span>
             </p>
             <p>
-              Paint time: {formatNumber(report.layoutMetrics.paintTimeMs)}ms
+              Paint time:{" "}
+              <span
+                className={healthToTextClass(
+                  paintMsHealth(report.layoutMetrics.paintTimeMs)
+                )}
+              >
+                {formatNumber(report.layoutMetrics.paintTimeMs)}ms
+              </span>
             </p>
           </div>
         </div>
@@ -431,55 +521,127 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
           </div>
           <div className="space-y-2 text-sm text-[var(--fg-muted)]">
             {report.webVitals.fcpMs != null && (
-              <p>FCP: {formatNumber(report.webVitals.fcpMs)}ms</p>
+              <p>
+                FCP:{" "}
+                <span
+                  className={healthToTextClass(
+                    fcpHealth(report.webVitals.fcpMs)!
+                  )}
+                >
+                  {formatNumber(report.webVitals.fcpMs)}ms
+                </span>
+              </p>
             )}
             {report.webVitals.lcpMs != null && (
-              <p>LCP: {formatNumber(report.webVitals.lcpMs)}ms</p>
+              <p>
+                LCP:{" "}
+                <span
+                  className={healthToTextClass(
+                    lcpHealth(report.webVitals.lcpMs)!
+                  )}
+                >
+                  {formatNumber(report.webVitals.lcpMs)}ms
+                </span>
+              </p>
             )}
-            <p>TBT: {formatNumber(report.webVitals.tbtMs)}ms</p>
+            <p>
+              TBT:{" "}
+              <span
+                className={healthToTextClass(tbtHealth(report.webVitals.tbtMs))}
+              >
+                {formatNumber(report.webVitals.tbtMs)}ms
+              </span>
+            </p>
             <p>Long tasks: {report.webVitals.longTaskCount}</p>
             {report.webVitals.cls != null && (
-              <p>CLS: {formatNumber(report.webVitals.cls)}</p>
+              <p>
+                CLS:{" "}
+                <span
+                  className={healthToTextClass(clsHealth(report.webVitals.cls))}
+                >
+                  {formatNumber(report.webVitals.cls)}
+                </span>
+              </p>
             )}
           </div>
         </div>
       </div>
 
-      {report.blockingSummary && report.blockingSummary.longTaskCount > 0 && (
-        <div className="mt-8 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
-            <ZapOff className="h-4 w-4 text-amber-400" />
-            Main thread blocking
+      {(report.blockingSummary &&
+        (report.blockingSummary.longTaskCount > 0 ||
+          report.webVitals.tbtMs > 0)) ||
+      (report.longTasks.tbtTimeline &&
+        report.longTasks.tbtTimeline.length > 0) ? (
+        <div
+          className={`mt-8 rounded-xl border p-4 ${healthToBorderClass(tbtHealth(report.webVitals.tbtMs))} ${healthToBgClass(tbtHealth(report.webVitals.tbtMs))}`}
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <ZapOff
+                className={`h-4 w-4 ${healthToTextClass(tbtHealth(report.webVitals.tbtMs))}`}
+              />
+              Total blocking time (TBT) & long tasks
+            </div>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 text-sm text-[var(--fg-muted)]">
-            <p>Long tasks: {report.blockingSummary.longTaskCount}</p>
-            <p>
-              Total blocked:{" "}
-              {formatNumber(report.blockingSummary.totalBlockedMs)} ms
-            </p>
-            <p>
-              Main thread blocked (TBT):{" "}
-              {formatNumber(report.blockingSummary.mainThreadBlockedMs)} ms
-            </p>
-            <p>
-              Longest task: {formatNumber(report.blockingSummary.maxBlockingMs)}{" "}
-              ms
-            </p>
-          </div>
+          {report.blockingSummary && (
+            <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4 text-sm text-[var(--fg-muted)]">
+              <p>Long tasks: {report.blockingSummary.longTaskCount}</p>
+              <p>
+                Sum of long-task durations:{" "}
+                {formatNumber(report.blockingSummary.totalBlockedMs)} ms
+              </p>
+              <p>
+                TBT (blocking &gt;50ms):{" "}
+                <span
+                  className={healthToTextClass(
+                    tbtHealth(report.webVitals.tbtMs)
+                  )}
+                >
+                  {formatNumber(report.blockingSummary.mainThreadBlockedMs)} ms
+                </span>
+              </p>
+              <p>
+                Longest task:{" "}
+                {formatNumber(report.blockingSummary.maxBlockingMs)} ms
+              </p>
+            </div>
+          )}
+          <TbtTimelineChart
+            durationSec={durationSec}
+            entries={report.longTasks.tbtTimeline ?? []}
+          />
         </div>
-      )}
+      ) : null}
 
       {report.downloadedAssets && report.downloadedAssets.totalCount > 0 && (
         <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-6">
-          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
-            <FileCode className="h-4 w-4 text-[var(--accent)]" />
-            Downloaded files — Build size, scripts, styles, API responses,
-            assets
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <FileCode className="h-4 w-4 text-[var(--accent)]" />
+              Downloaded files — initial vs full session
+            </div>
+            <button
+              type="button"
+              onClick={() => setAssetsModalOpen(true)}
+              className="rounded-full border border-[var(--accent)]/40 bg-[var(--accent-dim)] px-4 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:bg-[var(--accent)]/20"
+            >
+              View all files…
+            </button>
           </div>
-          <div className="mb-4 flex flex-wrap gap-3 text-xs">
-            <span className="rounded-full border border-[var(--border)] px-3 py-1">
-              Total: {formatBytes(report.downloadedAssets.totalBytes)} (
-              {report.downloadedAssets.totalCount} files)
+          <div className="mb-4 flex flex-wrap gap-3 text-xs text-[var(--fg-muted)]">
+            {report.downloadedAssets.initialLoadBytes != null && (
+              <span className="rounded-full border border-[var(--border)] px-3 py-1">
+                Initial bundle (FCP path ~):{" "}
+                {formatBytes(report.downloadedAssets.initialLoadBytes)}
+              </span>
+            )}
+            <span className="rounded-full border border-[var(--accent)]/30 px-3 py-1 text-[var(--accent)]">
+              Full session / game build:{" "}
+              {formatBytes(
+                report.downloadedAssets.sessionTotalBytes ??
+                  report.downloadedAssets.totalBytes
+              )}{" "}
+              ({report.downloadedAssets.totalCount} files)
             </span>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -529,13 +691,57 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
                     </ul>
                   )}
                   {data.files.length > 5 && (
-                    <p className="mt-2 text-xs text-[var(--fg-muted)]">
-                      +{data.files.length - 5} more
-                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setAssetsModalOpen(true)}
+                      className="mt-2 text-xs text-[var(--accent)] underline-offset-2 hover:underline"
+                    >
+                      +{data.files.length - 5} more (open list)
+                    </button>
                   )}
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {assetsModalOpen && report.downloadedAssets && (
+        <DownloadedAssetsModal
+          summary={report.downloadedAssets}
+          formatBytes={formatBytes}
+          onClose={() => setAssetsModalOpen(false)}
+        />
+      )}
+
+      {report.frameTiming && (
+        <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
+          <h3 className="mb-2 text-sm font-semibold text-[var(--fg)]">
+            Frame pacing (jank / staggering signal)
+          </h3>
+          <p className="mb-3 text-xs text-[var(--fg-muted)]">
+            From trace <code className="text-[var(--accent)]">DrawFrame</code>{" "}
+            spacing: high variance with similar average FPS often indicates
+            uneven delivery (CPU-driven jank vs smoother compositor paths).
+          </p>
+          <div className="grid gap-2 text-sm text-[var(--fg-muted)] sm:grid-cols-2 lg:grid-cols-4">
+            <p>
+              Risk:{" "}
+              <span
+                className={healthToTextClass(
+                  staggerHealth(report.frameTiming.staggerRisk)
+                )}
+              >
+                {report.frameTiming.staggerRisk}
+              </span>
+            </p>
+            <p>Avg frame Δ: {formatNumber(report.frameTiming.avgFrameMs)} ms</p>
+            <p>
+              σ frame Δ: {formatNumber(report.frameTiming.stdDevDeltaMs)} ms
+            </p>
+            <p>Max frame Δ: {formatNumber(report.frameTiming.maxDeltaMs)} ms</p>
+            <p>Irregular frames: {report.frameTiming.irregularFrames}</p>
+            <p>Samples: {report.frameTiming.sampleCount}</p>
           </div>
         </div>
       )}
@@ -599,6 +805,10 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
           <h3 className="mb-3 text-sm font-semibold text-[var(--fg)]">
             Session recording
           </h3>
+          <p className="mb-2 text-xs text-[var(--fg-muted)]">
+            Disable &quot;Record session video&quot; before start for long
+            captures if recording fails or slows the run.
+          </p>
           <p className="mb-2 text-xs text-[var(--fg-muted)]">
             Recording duration: {durationSec.toFixed(1)}s (playback constrained)
           </p>
