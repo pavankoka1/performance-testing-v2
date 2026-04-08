@@ -2,8 +2,8 @@
  * Download links — edit after uploading builds (also synced to repo root website/config.js if you keep both).
  */
 window.PERFTRACE_DOWNLOADS = {
-  mac: "https://drive.google.com/file/d/1oOGSzpud9i6O8Q8j69Pko6m0hDXmkZ5f/view?usp=drive_link",
-  win: "https://drive.google.com/file/d/1bsXHG3H7PvcG8h8t90ourrq6V9nVS8TY/view?usp=drive_link",
+  mac: "https://drive.google.com/file/d/1lC8TtZyzhTav04SX_vLsKMZMRJMx7jlQ/view?usp=drive_link",
+  win: "https://drive.google.com/file/d/12BmDXXc3EH6Y3ekkDUx3hJ1YLwZMMRHH/view?usp=drive_link",
   linux:
-    "https://drive.google.com/file/d/1IPMzM3gEwGr3iLaN5cu3yyvxqLcozoxY/view?usp=drive_link",
+    "https://drive.google.com/file/d/1cFVPixZvKBO-ZNksOrR663ffrKULZQ9D/view?usp=drive_link",
 };

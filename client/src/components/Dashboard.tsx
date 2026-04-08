@@ -53,7 +53,7 @@ export default function Dashboard() {
                   checked={webglBgEnabled}
                   onChange={(e) => setWebglBgEnabled(e.target.checked)}
                   className="h-3.5 w-3.5 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
-                  aria-label="Enable WebGL background"
+                  aria-label="Toggle WebGL background animation"
                 />
                 <Sparkles className="h-3.5 w-3.5 text-violet-400" aria-hidden />
                 <span>WebGL background</span>
