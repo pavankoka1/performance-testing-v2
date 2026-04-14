@@ -1,0 +1,17 @@
+{
+  "installCommand": "npm install --prefix website",
+  "buildCommand": "npm run build --prefix website",
+  "outputDirectory": "website/dist",
+  "framework": null,
+  "headers": [
+    {
+      "source": "/config.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    }
+  ]
+}
