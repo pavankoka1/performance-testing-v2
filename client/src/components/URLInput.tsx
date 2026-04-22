@@ -4,16 +4,18 @@ import { memo } from "react";
 type URLInputProps = {
   value: string;
   onChange: (value: string) => void;
+  /** Overrides the default "Target URL" label */
+  label?: string;
 };
 
-function URLInput({ value, onChange }: URLInputProps) {
+function URLInput({ value, onChange, label = "Target URL" }: URLInputProps) {
   return (
     <div className="flex flex-col gap-2">
       <label
         className="text-sm font-medium text-[var(--fg)]"
         htmlFor="target-url"
       >
-        Target URL
+        {label}
       </label>
       <div className="relative">
         <Globe className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--fg-muted)]" />

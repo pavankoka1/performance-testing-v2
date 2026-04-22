@@ -4,10 +4,34 @@ import { toast } from "react-hot-toast";
 
 type CpuThrottle = 1 | 4 | 6 | 20;
 
+/** Must match server `NETWORK_PRESETS` keys in capture.js */
+export type NetworkThrottlePreset =
+  | "none"
+  | "slow-3g"
+  | "fast-3g"
+  | "4g";
+
+export type AutomationGameId =
+  | "russian-roulette"
+  | "stake-roulette"
+  | "color-game-bonanza";
+
+export type AutomationStartPayload = {
+  enabled: true;
+  gameId: AutomationGameId;
+  rounds: 1 | 3 | 5 | 10;
+  casinoUser?: string;
+  casinoPass?: string;
+  /** When true, `url` must be the direct game URL (skips login + lobby). */
+  skipLobby?: boolean;
+};
+
 export type RecordingStartOptions = {
   /** Default true. Disable for long sessions to avoid Playwright video issues. */
   recordVideo?: boolean;
   trackReactRerenders?: boolean;
+  /** Pragmatic Live: login → lobby → game → N rounds; server stops trace when done. */
+  automation?: AutomationStartPayload;
 };
 
 const readJsonResponse = async (response: Response) => {
@@ -25,33 +49,78 @@ export function useRecording() {
   const [report, setReport] = useState<PerfReport | null>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const stopAbortRef = useRef<AbortController | null>(null);
+  const automationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearAutomationPoll = useCallback(() => {
+    if (automationPollRef.current) {
+      clearInterval(automationPollRef.current);
+      automationPollRef.current = null;
+    }
+  }, []);
 
   useEffect(
     () => () => {
       stopAbortRef.current?.abort();
+      clearAutomationPoll();
     },
-    []
+    [clearAutomationPoll]
   );
 
   const start = useCallback(
     async (
       url: string,
       cpuThrottle: CpuThrottle,
+      networkThrottle: NetworkThrottlePreset,
       options?: RecordingStartOptions
     ) => {
+      clearAutomationPoll();
       setIsRecording(true);
       setReport(null);
       setStreamUrl(null);
 
       try {
+        const automationBody =
+          options?.automation?.enabled === true
+            ? (() => {
+                const r = Number(options.automation.rounds);
+                const allowed = [1, 3, 5, 10] as const;
+                const rounds = allowed.includes(r as (typeof allowed)[number])
+                  ? (r as (typeof allowed)[number])
+                  : 1;
+                const u = options.automation.casinoUser?.trim();
+                const p = options.automation.casinoPass?.trim();
+                return {
+                  enabled: true,
+                  gameId: options.automation.gameId,
+                  rounds,
+                  casinoUser: u ? u : undefined,
+                  casinoPass: p ? p : undefined,
+                  skipLobby:
+                    options.automation.skipLobby === true ? true : undefined,
+                };
+              })()
+            : undefined;
+
+        const netPresets: NetworkThrottlePreset[] = [
+          "none",
+          "slow-3g",
+          "fast-3g",
+          "4g",
+        ];
+        const netOk = netPresets.includes(networkThrottle)
+          ? networkThrottle
+          : "none";
+
         const response = await fetch("/api/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             url,
             cpuThrottle,
+            networkThrottle: netOk,
             trackReactRerenders: !!options?.trackReactRerenders,
             recordVideo: options?.recordVideo !== false,
+            automation: automationBody,
           }),
         });
         const data = await readJsonResponse(response);
@@ -62,13 +131,56 @@ export function useRecording() {
               : "Failed to start recording."
           );
         }
-        if (data.streamUrl) {
+        const auto = data.automation as { enabled?: boolean } | undefined;
+        if (auto?.enabled) {
+          toast.success(
+            "Automated script running — report appears when rounds complete."
+          );
+        } else if (data.streamUrl) {
           setStreamUrl(data.streamUrl as string);
           toast.success(
             "Recording started. Open the VNC stream to interact with the browser."
           );
         } else {
           toast.success("Recording started. Browser session is active.");
+        }
+
+        if (auto?.enabled) {
+          automationPollRef.current = setInterval(async () => {
+            try {
+              const sessionRes = await fetch("/api/session");
+              const s = await readJsonResponse(sessionRes);
+              if (s.processing) {
+                setIsProcessing(true);
+                setIsRecording(false);
+              }
+              if (s.report) {
+                clearAutomationPoll();
+                setReport(s.report as PerfReport);
+                setIsRecording(false);
+                setIsProcessing(false);
+                setStreamUrl(null);
+                const errMsg =
+                  typeof s.error === "string" ? s.error : undefined;
+                if (errMsg) {
+                  toast.error(`Automation issue: ${errMsg}`);
+                }
+                toast.success("Trace processed. Report ready.");
+              } else if (
+                !s.recording &&
+                !s.processing &&
+                typeof s.error === "string" &&
+                s.error
+              ) {
+                clearAutomationPoll();
+                setIsRecording(false);
+                setIsProcessing(false);
+                toast.error(s.error);
+              }
+            } catch {
+              /* keep polling */
+            }
+          }, 1200);
         }
       } catch (error) {
         const message =
@@ -77,10 +189,11 @@ export function useRecording() {
         setIsRecording(false);
       }
     },
-    []
+    [clearAutomationPoll]
   );
 
   const stop = useCallback(async () => {
+    clearAutomationPoll();
     setIsRecording(false);
     setStreamUrl(null);
     setIsProcessing(true);

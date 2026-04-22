@@ -1,0 +1,56 @@
+/**
+ * PerfTrace theme hooks for Plyr — complements `plyr/dist/plyr.css`.
+ */
+.session-video-shell {
+  position: relative;
+  width: 100%;
+  max-width: 72rem;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #000;
+  box-shadow:
+    0 0 0 1px rgba(139, 92, 246, 0.08),
+    0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.session-video-shell .plyr {
+  --plyr-color-main: #a78bfa;
+  --plyr-video-background: #0a0a0b;
+  --plyr-menu-background: rgba(18, 18, 22, 0.96);
+  --plyr-menu-color: #e4e4e7;
+  --plyr-audio-control-background-hover: rgba(139, 92, 246, 0.25);
+  --plyr-range-fill-background: #a78bfa;
+  --plyr-range-thumb-background: #ddd6fe;
+  --plyr-tooltip-background: rgba(24, 24, 30, 0.95);
+  --plyr-tooltip-color: #fafafa;
+  --plyr-badge-background: rgba(139, 92, 246, 0.35);
+  --plyr-badge-text: #f5f3ff;
+}
+
+.session-video-shell .plyr__control--overlaid {
+  background: rgba(139, 92, 246, 0.9);
+  color: #fff;
+}
+
+.session-video-shell .plyr__control--overlaid:hover {
+  background: rgba(167, 139, 250, 1);
+}
+
+.session-video-shell .plyr__progress__buffer {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Slightly larger touch targets on the control bar */
+.session-video-shell .plyr__controls {
+  padding: 10px 12px;
+}
+
+.session-video-shell .plyr__video-wrapper {
+  max-height: min(70vh, 42rem);
+}
+
+.session-video-shell video {
+  object-fit: contain;
+  max-height: inherit;
+}

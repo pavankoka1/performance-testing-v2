@@ -6,6 +6,7 @@ type RecordButtonsProps = {
   isProcessing: boolean;
   onStart: () => void;
   onStop: () => void;
+  startLabel?: string;
 };
 
 function RecordButtons({
@@ -13,6 +14,7 @@ function RecordButtons({
   isProcessing,
   onStart,
   onStop,
+  startLabel = "Launch & Start Recording",
 }: RecordButtonsProps) {
   return (
     <div className="flex flex-col gap-4 sm:flex-row">
@@ -23,7 +25,7 @@ function RecordButtons({
         className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-[var(--glow)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Play className="h-4 w-4" />
-        Launch & Start Recording
+        {startLabel}
       </button>
       <button
         type="button"

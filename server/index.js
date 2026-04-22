@@ -7,6 +7,7 @@ const {
   stopCaptureSession,
   getLiveMetrics,
   getLatestVideo,
+  getSessionSnapshot,
 } = require("./lib/capture");
 const { getSystemStatus } = require("./lib/systemStatus");
 const { CONTENT_SECURITY_POLICY } = require("../csp.js");
@@ -34,19 +35,52 @@ app.post("/api/start", async (req, res) => {
     const {
       url,
       cpuThrottle = 1,
+      networkThrottle = "none",
       trackReactRerenders = false,
       recordVideo = true,
+      automation,
     } = req.body || {};
     if (!url || typeof url !== "string") {
       return res
         .status(400)
         .json({ error: "Missing or invalid 'url' in request body." });
     }
+    const netAllowed = new Set(["none", "slow-3g", "fast-3g", "4g"]);
+    const netPreset =
+      typeof networkThrottle === "string" && netAllowed.has(networkThrottle)
+        ? networkThrottle
+        : "none";
+
+    const automationOpts =
+      automation && typeof automation === "object" && automation.enabled
+        ? {
+            enabled: true,
+            gameId:
+              typeof automation.gameId === "string"
+                ? automation.gameId
+                : "russian-roulette",
+            rounds:
+              automation.rounds !== undefined && automation.rounds !== null
+                ? Number(automation.rounds)
+                : undefined,
+            casinoUser:
+              typeof automation.casinoUser === "string"
+                ? automation.casinoUser.trim() || undefined
+                : undefined,
+            casinoPass:
+              typeof automation.casinoPass === "string"
+                ? automation.casinoPass.trim() || undefined
+                : undefined,
+            skipLobby: automation.skipLobby === true,
+          }
+        : null;
     const result = await createCaptureSession(
       url,
       cpuThrottle,
+      netPreset,
       !!trackReactRerenders,
-      recordVideo !== false
+      recordVideo !== false,
+      automationOpts
     );
     return res.json(result);
   } catch (error) {
@@ -59,7 +93,7 @@ app.post("/api/start", async (req, res) => {
 // API: Stop recording and get report
 app.post("/api/stop", async (req, res) => {
   try {
-    const report = await stopCaptureSession();
+    const report = await stopCaptureSession({ userRequested: true });
     return res.json({ report });
   } catch (error) {
     const message =
@@ -76,6 +110,17 @@ app.get("/api/system-status", async (req, res) => {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to get system status.";
+    return res.status(500).json({ error: message });
+  }
+});
+
+// API: Session state (automation polling: recording / processing / report)
+app.get("/api/session", (req, res) => {
+  try {
+    return res.json(getSessionSnapshot());
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to get session state.";
     return res.status(500).json({ error: message });
   }
 });
@@ -120,7 +165,7 @@ function startServer(port = PORT) {
     const server = app.listen(port, () => {
       console.log(`PerfTrace server running at http://localhost:${port}`);
       console.log(
-        "API: POST /api/start, POST /api/stop, GET /api/metrics, GET /api/video"
+        "API: POST /api/start, POST /api/stop, GET /api/session, GET /api/metrics, GET /api/video"
       );
       resolve(server);
     });

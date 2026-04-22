@@ -22,6 +22,7 @@ import {
   BarChart2,
   Download,
   FileCode,
+  Film,
   HelpCircle,
   Layers,
   ListChecks,
@@ -29,7 +30,7 @@ import {
   Wrench,
   ZapOff,
 } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import AnimationLayersHelpModal from "./AnimationLayersHelpModal";
 import AnimationTimeline from "./AnimationTimeline";
 import DownloadedAssetsModal from "./DownloadedAssetsModal";
@@ -37,6 +38,7 @@ import GraphModal from "./GraphModal";
 import MetricChart from "./MetricChart";
 import ReactRerendersSection from "./ReactRerendersSection";
 import TbtTimelineChart from "./TbtTimelineChart";
+import SessionVideoPlayer from "./SessionVideoPlayer";
 
 type ReportViewerProps = {
   report: PerfReport | null;
@@ -84,34 +86,11 @@ function SummaryStatCard({
 }
 
 function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [reportTimeSec, setReportTimeSec] = useState(0);
   const [graphModal, setGraphModal] = useState<GraphModalState>(null);
   const [assetsModalOpen, setAssetsModalOpen] = useState(false);
   const [animationLayersHelpOpen, setAnimationLayersHelpOpen] = useState(false);
 
   const durationSec = report ? report.durationMs / 1000 : 0;
-
-  useEffect(() => {
-    if (!report) return;
-    setReportTimeSec(0);
-  }, [report]);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v || !report?.video) return;
-    const syncFromVideo = () => setReportTimeSec(v.currentTime);
-    v.addEventListener("timeupdate", syncFromVideo);
-    return () => v.removeEventListener("timeupdate", syncFromVideo);
-  }, [report?.video]);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v || !report?.video) return;
-    if (Number.isNaN(v.duration) || v.duration <= 0) return;
-    if (Math.abs(v.currentTime - reportTimeSec) < 0.25) return;
-    v.currentTime = reportTimeSec;
-  }, [report?.video, reportTimeSec]);
 
   if (!report) {
     return (
@@ -802,32 +781,42 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
 
       {report.video && (
         <div className="mt-8">
-          <h3 className="mb-3 text-sm font-semibold text-[var(--fg)]">
-            Session recording
-          </h3>
-          <p className="mb-2 text-xs text-[var(--fg-muted)]">
-            Disable &quot;Record session video&quot; before start for long
-            captures if recording fails or slows the run.
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+                <Film className="h-4 w-4 text-[var(--accent)]" />
+                Session recording
+              </h3>
+              <p className="mt-1 text-xs text-[var(--fg-muted)]">
+                WebM capture aligned to your trace (
+                <span className="text-[var(--fg)]">
+                  {durationSec.toFixed(1)}s
+                </span>{" "}
+                session window). Playback stops at the report end.
+              </p>
+            </div>
+            <p className="max-w-sm text-[11px] leading-relaxed text-[var(--fg-muted)]">
+              <span className="font-medium text-[var(--fg)]">Controls:</span>{" "}
+              Space play/pause ·{" "}
+              <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-0.5 font-mono text-[10px]">
+                M
+              </kbd>{" "}
+              mute ·{" "}
+              <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-0.5 font-mono text-[10px]">
+                F
+              </kbd>{" "}
+              fullscreen · seek bar · speed &amp; volume in the bar · PiP where
+              supported.
+            </p>
+          </div>
+          <p className="mb-3 text-xs text-[var(--fg-muted)]">
+            Tip: disable &quot;Record session video&quot; before very long runs
+            if capture is slow or fails.
           </p>
-          <p className="mb-2 text-xs text-[var(--fg-muted)]">
-            Recording duration: {durationSec.toFixed(1)}s (playback constrained)
-          </p>
-          <video
-            ref={videoRef}
-            src={report.video.url}
-            controls
-            className="max-h-96 w-full rounded-xl border border-[var(--border)]"
-            onTimeUpdate={(e) => {
-              const v = e.currentTarget;
-              if (v.currentTime >= durationSec - 0.1) {
-                v.pause();
-                v.currentTime = Math.min(v.currentTime, durationSec);
-              }
-            }}
-            onSeeked={(e) => {
-              const v = e.currentTarget;
-              if (v.currentTime > durationSec) v.currentTime = durationSec;
-            }}
+          <SessionVideoPlayer
+            key={`${report.startedAt}-${report.stoppedAt}`}
+            src={`${report.video.url}?t=${encodeURIComponent(report.stoppedAt)}`}
+            maxDurationSec={durationSec}
           />
         </div>
       )}

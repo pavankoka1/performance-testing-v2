@@ -588,6 +588,9 @@ const VIEWPORT_HEIGHT = 768;
 
 let activeSession = null;
 let lastVideoPath = null;
+let reportGenerationInProgress = false;
+let cachedSessionReport = null;
+let lastAutomationError = null;
 let xvfbProcess = null;
 let vncProcess = null;
 let websockifyProcess = null;
@@ -719,19 +722,29 @@ async function getLaunchOptions() {
   // Use headed mode so the user can see and interact with the browser.
   // Set HEADLESS=true for remote servers / CI (no display).
   const headless = process.env.HEADLESS === "true";
+  /**
+   * On macOS, Chromium’s GPU process often floods stderr with harmless EGL errors (eglQueryDeviceAttribEXT).
+   * `--disable-gpu` stops that without the heavier flags (e.g. SwiftShader) that can break a headed window.
+   * For real GPU profiling, set PERFTRACE_KEEP_GPU=true (expect the noise back).
+   */
+  const macGpuNoise =
+    process.platform === "darwin" && process.env.PERFTRACE_KEEP_GPU !== "true"
+      ? ["--disable-gpu"]
+      : [];
   return {
     headless,
     args: [
       "--disable-dev-shm-usage",
       "--window-size=1366,768",
       "--window-position=0,0",
+      ...macGpuNoise,
     ],
     defaultViewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
   };
 }
 
-async function ensureClientCollectors(page) {
-  await page.addInitScript(() => {
+async function ensureClientCollectors(context) {
+  await context.addInitScript(() => {
     const w = window;
     if (w.__perftraceCollector) return;
     const collector = {
@@ -799,8 +812,8 @@ async function ensureClientCollectors(page) {
   });
 }
 
-async function ensureMemoryAndDomCollector(page) {
-  await page.addInitScript(() => {
+async function ensureMemoryAndDomCollector(context) {
+  await context.addInitScript(() => {
     const w = window;
     if (w.__perftraceMemory !== undefined) return;
     const sample = () => {
@@ -819,8 +832,8 @@ async function ensureMemoryAndDomCollector(page) {
   });
 }
 
-async function ensureResourceTimingCollector(page) {
-  await page.addInitScript(() => {
+async function ensureResourceTimingCollector(context) {
+  await context.addInitScript(() => {
     const w = window;
     if (w.__perftraceResources !== undefined) return;
     w.__perftraceResources = { resources: [], navigation: [] };
@@ -878,8 +891,8 @@ async function ensureFpsCollector(page) {
   });
 }
 
-async function ensureAnimationPropertyCollector(page) {
-  await page.addInitScript(() => {
+async function ensureAnimationPropertyCollector(context) {
+  await context.addInitScript(() => {
     const w = window;
     if (w.__perftraceAnimationProps !== undefined) return;
     w.__perftraceAnimationProps = [];
@@ -930,15 +943,138 @@ async function ensureAnimationPropertyCollector(page) {
   });
 }
 
+/** Rounds from UI/API may be string, float, or missing — always 1 | 3 | 5 | 10. */
+function normalizeAutomationRounds(raw) {
+  const allowed = new Set([1, 3, 5, 10]);
+  if (raw === undefined || raw === null || raw === "") {
+    console.warn(
+      "[PerfTrace] automation.rounds missing — defaulting to 1 (shortest run)"
+    );
+    return 1;
+  }
+  const n =
+    typeof raw === "string" ? parseInt(raw.trim(), 10) : Number(raw);
+  const r = Number.isFinite(n) ? Math.trunc(n) : NaN;
+  if (allowed.has(r)) {
+    console.log("[PerfTrace] automation rounds (normalized):", r);
+    return r;
+  }
+  console.warn(
+    "[PerfTrace] Invalid automation.rounds:",
+    raw,
+    "— defaulting to 1 (allowed: 1, 3, 5, 10)"
+  );
+  return 1;
+}
+
+/** Keys must match client `NetworkThrottlePreset` (useRecording.ts) and server/index.js. */
+const NETWORK_PRESETS = {
+  none: { latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+  /** ~400 Kbps, high RTT — DevTools-style “Slow 3G”. */
+  "slow-3g": {
+    latency: 2000,
+    downloadThroughput: 50 * 1024,
+    uploadThroughput: 50 * 1024,
+  },
+  "fast-3g": {
+    latency: 150,
+    downloadThroughput: 200 * 1024,
+    uploadThroughput: 200 * 1024,
+  },
+  /** Moderate mobile — still throttled vs desktop fiber. */
+  "4g": {
+    latency: 20,
+    downloadThroughput: 5 * 1024 * 1024,
+    uploadThroughput: 2 * 1024 * 1024,
+  },
+};
+
+/**
+ * CDP: network shaping + optional CPU slowdown on the page-attached session.
+ * Re-applied after tab switches (automation opens game in a new page).
+ */
+async function applyPageEmulation(cdpSession, { cpuThrottle, networkThrottle }) {
+  const key =
+    networkThrottle && NETWORK_PRESETS[networkThrottle]
+      ? networkThrottle
+      : "none";
+  const net = NETWORK_PRESETS[key];
+  try {
+    await cdpSession.send("Network.enable");
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cdpSession.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: net.latency,
+      downloadThroughput: net.downloadThroughput,
+      uploadThroughput: net.uploadThroughput,
+    });
+  } catch (e) {
+    console.warn(
+      "[PerfTrace] Network.emulateNetworkConditions:",
+      e?.message || e
+    );
+  }
+  if (cpuThrottle > 1) {
+    try {
+      await cdpSession.send("Emulation.setCPUThrottlingRate", {
+        rate: cpuThrottle,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * After navigating to a new tab, the old page may be closed — CDP sessions die with it.
+ * Rebind metrics + trace CDP and reset perf deltas so sampling keeps working on the live tab.
+ */
+async function rebindCaptureSessionToPage(session, newPage) {
+  if (!session?.context || !newPage) return;
+  try {
+    if (newPage.isClosed()) return;
+  } catch {
+    return;
+  }
+  session.page = newPage;
+  const { context, cpuThrottle, networkThrottle } = session;
+  try {
+    const newMetrics = await context.newCDPSession(newPage);
+    await newMetrics.send("Performance.enable");
+    await applyPageEmulation(newMetrics, {
+      cpuThrottle,
+      networkThrottle: networkThrottle || "none",
+    });
+    session.metricsCdp = newMetrics;
+    session.traceCdp = await context.newCDPSession(newPage);
+    session.lastPerfTotals = undefined;
+    await ensureFpsCollector(newPage);
+    console.log(
+      "[PerfTrace] Rebound CDP to active page:",
+      newPage.url?.() || "(no url)"
+    );
+  } catch (e) {
+    console.warn("[PerfTrace] rebindCaptureSessionToPage:", e?.message || e);
+  }
+}
+
 async function createCaptureSession(
   url,
   cpuThrottle = 1,
+  networkThrottle = "none",
   trackReactRerenders = false,
-  recordVideo = true
+  recordVideo = true,
+  automationOpts = null
 ) {
   if (activeSession) {
     throw new Error("A recording session is already running.");
   }
+
+  cachedSessionReport = null;
+  lastAutomationError = null;
 
   const safeUrl = ensureValidUrl(url);
   const launchOptions = await getLaunchOptions();
@@ -961,7 +1097,13 @@ async function createCaptureSession(
         }
       : {}),
   });
+  await ensureClientCollectors(context);
+  await ensureMemoryAndDomCollector(context);
+  await ensureAnimationPropertyCollector(context);
+  await ensureResourceTimingCollector(context);
+
   const page = await context.newPage();
+  const recordingStartMs = Date.now();
   const traceCdp = await context.newCDPSession(page);
   const metricsCdp = await context.newCDPSession(page);
 
@@ -970,6 +1112,14 @@ async function createCaptureSession(
   // or wrong GPU/layout/paint data.
 
   await metricsCdp.send("Performance.enable");
+  const networkThrottlePreset =
+    networkThrottle && NETWORK_PRESETS[networkThrottle]
+      ? networkThrottle
+      : "none";
+  await applyPageEmulation(metricsCdp, {
+    cpuThrottle,
+    networkThrottle: networkThrottlePreset,
+  });
   const collectedAnimations = [];
   try {
     await metricsCdp.send("Animation.enable");
@@ -993,13 +1143,6 @@ async function createCaptureSession(
       });
     });
   } catch {}
-  if (cpuThrottle > 1) {
-    try {
-      await metricsCdp.send("Emulation.setCPUThrottlingRate", {
-        rate: cpuThrottle,
-      });
-    } catch {}
-  }
   await traceCdp.send("Tracing.start", {
     categories: [
       "devtools.timeline",
@@ -1019,11 +1162,6 @@ async function createCaptureSession(
     transferMode: "ReturnAsStream",
   });
 
-  await ensureClientCollectors(page);
-  await ensureMemoryAndDomCollector(page);
-  await ensureAnimationPropertyCollector(page);
-  await ensureResourceTimingCollector(page);
-
   let rrtClient = null;
   if (trackReactRerenders) {
     try {
@@ -1034,7 +1172,6 @@ async function createCaptureSession(
     } catch {}
   }
 
-  const recordingStartMs = Date.now();
   await page.goto(safeUrl, { waitUntil: "domcontentloaded" });
   await ensureFpsCollector(page);
 
@@ -1043,7 +1180,6 @@ async function createCaptureSession(
   const networkRequests = [];
   const requestIds = new WeakMap();
   const pendingRequests = new Map();
-  let lastPerfTotals;
 
   context.on("request", (request) => {
     const id = randomUUID();
@@ -1102,7 +1238,8 @@ async function createCaptureSession(
         jsHeapSize,
         nodes,
       };
-      const lastTotals = lastPerfTotals;
+      const sess = activeSession;
+      const lastTotals = sess?.lastPerfTotals;
       const deltaTask = lastTotals
         ? Math.max(0, (totals.taskDuration - lastTotals.taskDuration) * 1000)
         : 0;
@@ -1121,7 +1258,7 @@ async function createCaptureSession(
       const deltaPaint = lastTotals
         ? Math.max(0, (totals.paintDuration - lastTotals.paintDuration) * 1000)
         : 0;
-      lastPerfTotals = totals;
+      if (sess) sess.lastPerfTotals = totals;
       const SAMPLE_WINDOW_MS = 1000;
       const cpuPercent = Math.min(
         100,
@@ -1155,9 +1292,61 @@ async function createCaptureSession(
     networkRequests,
     sampleInterval,
     cpuThrottle,
+    networkThrottle: networkThrottlePreset,
     rrtClient,
     collectedAnimations,
+    lastPerfTotals: undefined,
   };
+
+  activeSession.rebindToActivePage = async function rebindPage(newPage) {
+    await rebindCaptureSessionToPage(this, newPage);
+  };
+
+  if (automationOpts?.enabled) {
+    const { runCasinoAutomation } = require("./casinoAutomation");
+    const { getAutomationGame } = require("./casinoGames");
+    const ac = new AbortController();
+    activeSession.automationAbort = ac;
+    const rounds = normalizeAutomationRounds(automationOpts.rounds);
+    const gameId = automationOpts.gameId || "russian-roulette";
+    const gameMeta = getAutomationGame(gameId);
+    activeSession.automation = {
+      gameId,
+      rounds,
+      phase: "starting",
+      skipLobby: !!automationOpts.skipLobby,
+    };
+    const user =
+      automationOpts.casinoUser ||
+      process.env.CASINO_USER ||
+      gameMeta?.defaultCasinoUser ||
+      "abdulg";
+    const password =
+      automationOpts.casinoPass ||
+      process.env.CASINO_PASS ||
+      gameMeta?.defaultCasinoPass ||
+      "abdulg123";
+
+    void runCasinoAutomation(activeSession, {
+      gameId,
+      rounds,
+      user,
+      password,
+      skipLobby: !!automationOpts.skipLobby,
+      signal: ac.signal,
+    })
+      .then(async () => {
+        if (activeSession) await stopCaptureSession();
+      })
+      .catch(async (err) => {
+        if (err && err.code === "AUTOMATION_CANCELLED") {
+          return;
+        }
+        lastAutomationError = err instanceof Error ? err.message : String(err);
+        console.error("[PerfTrace] Automation failed:", err);
+        if (activeSession) await stopCaptureSession();
+      });
+  }
 
   const baseUrl =
     process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
@@ -1170,10 +1359,20 @@ async function createCaptureSession(
     status: "recording",
     url: safeUrl,
     streamUrl,
+    automation: automationOpts?.enabled
+      ? {
+          enabled: true,
+          gameId: activeSession.automation?.gameId ?? "russian-roulette",
+          rounds: activeSession.automation?.rounds ?? 1,
+          skipLobby: !!automationOpts.skipLobby,
+        }
+      : undefined,
   };
 }
 
-async function stopCaptureSession() {
+async function stopCaptureSession(opts = {}) {
+  const userRequested = !!opts.userRequested;
+
   if (!activeSession) {
     const fallback = buildFallbackReport(Date.now() - 60000, Date.now(), {
       samples: [],
@@ -1189,23 +1388,33 @@ async function stopCaptureSession() {
     return fallback;
   }
 
-  const {
-    browser,
-    context,
-    page,
-    traceCdp,
-    startedAt,
-    recordedUrl = null,
-    samples,
-    fpsSamples,
-    networkRequests,
-    sampleInterval,
-    rrtClient,
-    collectedAnimations = [],
-  } = activeSession;
-  activeSession = null;
+  if (userRequested && activeSession.automationAbort) {
+    try {
+      activeSession.automationAbort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
 
-  if (sampleInterval) clearInterval(sampleInterval);
+  reportGenerationInProgress = true;
+  try {
+    const {
+      browser,
+      context,
+      page,
+      traceCdp,
+      startedAt,
+      recordedUrl = null,
+      samples,
+      fpsSamples,
+      networkRequests,
+      sampleInterval,
+      rrtClient,
+      collectedAnimations = [],
+    } = activeSession;
+    activeSession = null;
+
+    if (sampleInterval) clearInterval(sampleInterval);
 
   let pageFps = [];
   try {
@@ -1301,32 +1510,42 @@ async function stopCaptureSession() {
     console.warn("[PerfTrace] CDP trace read:", e?.message || e);
   }
 
+  /**
+   * Playwright `Video.path()` waits for the page to close (artifact resolves on close).
+   * Awaiting `path()` *before* `context.close()` deadlocks: path never resolves until the
+   * context closes, so the browser window stays open forever. Collect handles first,
+   * close the context, then read paths.
+   */
+  const videoHandles = [];
+  try {
+    for (const p of context.pages()) {
+      if (p.isClosed()) continue;
+      const v = p.video();
+      if (v) videoHandles.push(v);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  await context.close().catch((e) =>
+    console.warn("[PerfTrace] context.close:", e?.message || e)
+  );
+  await browser.close().catch((e) =>
+    console.warn("[PerfTrace] browser.close:", e?.message || e)
+  );
+
   const candidates = [];
-  const pageVideo = page.video();
-  if (pageVideo) {
+  for (const v of videoHandles) {
     try {
-      const fp = await pageVideo.path();
+      const fp = await v.path();
       const st = await fs.stat(fp);
       candidates.push({ path: fp, size: st.size });
     } catch {}
-  }
-  for (const p of context.pages()) {
-    const v = p.video();
-    if (v && v !== pageVideo) {
-      try {
-        const fp = await v.path();
-        const st = await fs.stat(fp);
-        candidates.push({ path: fp, size: st.size });
-      } catch {}
-    }
   }
   if (candidates.length > 0) {
     candidates.sort((a, b) => b.size - a.size);
     lastVideoPath = candidates[0].path;
   }
-
-  await context.close().catch(() => {});
-  await browser.close().catch(() => {});
 
   const traceText = "";
 
@@ -1470,7 +1689,11 @@ async function stopCaptureSession() {
     animations: normalizeAnimationEntries(allAnims),
     totalAnimations: allAnims.length,
   };
-  return report;
+    cachedSessionReport = report;
+    return report;
+  } finally {
+    reportGenerationInProgress = false;
+  }
 }
 
 function buildFallbackReport(startedAt, stoppedAt, fallback) {
@@ -1649,9 +1872,20 @@ async function getLatestVideo() {
   return { data, contentType: "video/webm" };
 }
 
+function getSessionSnapshot() {
+  return {
+    recording: !!activeSession,
+    processing: reportGenerationInProgress,
+    report: cachedSessionReport,
+    automation: activeSession?.automation ?? null,
+    error: lastAutomationError,
+  };
+}
+
 module.exports = {
   createCaptureSession,
   stopCaptureSession,
   getLiveMetrics,
   getLatestVideo,
+  getSessionSnapshot,
 };

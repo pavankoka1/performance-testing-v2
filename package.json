@@ -21,7 +21,7 @@
     "deploy:website:perftrace": "cd website && node deploy-performance-testing-website.cjs",
     "deploy:website:prebuilt": "cd website && node prepare-vercel-output.cjs && npx vercel deploy --prebuilt --prod",
     "deploy:website:netlify": "cd website && npx netlify deploy --prod --dir=.",
-    "postinstall": "npm install --prefix client && playwright install chromium"
+    "postinstall": "node scripts/postinstall.cjs"
   },
   "dependencies": {
     "@sparticuz/chromium": "^143.0.4",
