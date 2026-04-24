@@ -1,8 +1,13 @@
 /**
- * Game definitions for automated casino flows (lobby search text + round UI selectors).
- * Pragmatic Live roulette variants share one table pattern; Color Game Bonanza uses broader bet-spot selectors (no roulette data-bet-code).
- * Roulette overrides: PP_RR_TIMER, PP_RR_TIMER_OPEN, PP_RR_CHIP, PP_RR_BET_SPOT, PP_RR_RESULT, PP_RR_WAIT
- * Color Game Bonanza overrides: PP_CGB_TIMER, PP_CGB_CHIP, PP_CGB_BET_SPOT, PP_CGB_RESULT, PP_CGB_WAIT
+ * Automation game registry.
+ *
+ * This repo ships with ONE built-in game: Color Game Bonanza.
+ * To add another game, copy the `color-game-bonanza` entry and adjust:
+ * - lobbySearchText
+ * - defaultAuthUrl
+ * - getBettingConfig() selectors (timer/result/chip/betSpot)
+ *
+ * Keep the exported shape stable so capture/automation stays generic.
  */
 
 function envOrUnion(envKey, fallbacks) {
@@ -15,77 +20,6 @@ function envOrUnion(envKey, fallbacks) {
       .join(", ");
   }
   return fallbacks.filter(Boolean).join(", ");
-}
-
-/**
- * @param {{ fortuneTimerBettingOpen?: boolean }} opts — Fortune/Russian Roulette use #roundTimerContainer.showTimerCountdown; Stake Roulette UI differs, so omit and use broad `timer` + observe flow (timer → result → timer again).
- */
-function pragmaticRouletteBettingSelectors(opts = {}) {
-  const { fortuneTimerBettingOpen = false } = opts;
-  return {
-    timer: envOrUnion("PP_RR_TIMER", [
-      '[data-testid="base-timer"]',
-      '[data-testid="betting-timer"]',
-      '[data-testid*="betting-timer" i]',
-      '[data-testid*="round-timer" i]',
-      '[data-testid*="roundTimer" i]',
-      '[data-testid*="Timer" i]',
-      '[data-testid*="timer" i]',
-      '[class*="BettingTimer" i]',
-      '[class*="RoundTimer" i]',
-      '[class*="betting-timer" i]',
-      '[class*="Timer"]',
-      '[class*="timer"]',
-      '[class*="countdown" i]',
-      '[class*="Clock" i]',
-    ]),
-    ...(fortuneTimerBettingOpen
-      ? {
-          /**
-           * Fortune Roulette: container stays in DOM; only this class marks “countdown running”.
-           * Stake Roulette: leave unset — use `timer` union only (override via PP_RR_TIMER_OPEN if needed).
-           */
-          timerBettingOpen: envOrUnion("PP_RR_TIMER_OPEN", [
-            "#roundTimerContainer.showTimerCountdown",
-          ]),
-        }
-      : {}),
-    chip: envOrUnion("PP_RR_CHIP", [
-      '[data-testid="chip-stack"] button',
-      '[data-testid="chip-stack"] [role="button"]',
-      '[data-testid*="chip-stack" i] button',
-      '[data-testid*="chip-stack" i] [role="button"]',
-      '[data-testid="chip-selector"] button',
-      '[data-testid*="chip-selector" i] button',
-      '[class*="ChipStack"] button',
-      '[class*="ChipStack"] [role="button"]',
-      '[class*="ChipSelector"] button',
-      '[class*="ChipsRail" i] button',
-      '[class*="ChipsRail" i] [role="button"]',
-      'div[role="button"][class*="Chip" i]',
-      'button[class*="chip" i]',
-      '[class*="chip"] button',
-      'button[aria-label*="$" i]',
-      'button[aria-label*="€" i]',
-      'button[aria-label*="£" i]',
-    ]),
-    betSpot: envOrUnion("PP_RR_BET_SPOT", [
-      '[data-testid="straight-up"] [data-testid="bet-spot"]',
-      '[data-testid="bet-spot"]',
-      '[data-testid*="bet-spot" i]',
-      '[class*="BetSpot"]',
-      '[class*="bet-spot" i]',
-      "canvas",
-    ]),
-    waitForHidden: process.env.PP_RR_WAIT || undefined,
-    result: envOrUnion("PP_RR_RESULT", [
-      '[data-testid="winning-number"]',
-      '[data-testid*="result" i]',
-      '[class*="Winning"]',
-      '[class*="winning-number" i]',
-      '[class*="result" i]',
-    ]),
-  };
 }
 
 /** Color Game Bonanza — show game; not a roulette layout (generic bet-spot / chip-stack). */
@@ -116,11 +50,6 @@ function colorGameBonanzaBettingSelectors() {
   };
 }
 
-/** Pragmatic Live auth entry (games lobby). */
-const DEFAULT_AUTH_URL_GAMES =
-  process.env.AUTH_URL ||
-  "https://games.pragmaticplaylive.net/authentication/authenticate.jsp";
-
 /** Certification / Color Game Bonanza (see Performance_Automation/casinoBettingFlow.js). */
 const DEFAULT_AUTH_URL_CERTIFICATION =
   process.env.AUTH_URL_CERT ||
@@ -145,27 +74,6 @@ const PRAGMATIC_LOBBY_READY_TESTIDS = [
  * }>}
  */
 const GAMES = {
-  "russian-roulette": {
-    lobbySearchText: "Russian Roulette",
-    getBettingConfig: () => pragmaticRouletteBettingSelectors({ fortuneTimerBettingOpen: true }),
-    defaultAuthUrl: DEFAULT_AUTH_URL_GAMES,
-    defaultCasinoUser: "abdulg",
-    defaultCasinoPass: "abdulg123",
-    lobbyReadyTestIds: [...PRAGMATIC_LOBBY_READY_TESTIDS],
-    lobbySearchTriggerTestId: "lobby-category-search",
-    /** Timer → result only (no chip clicks). */
-    automationMode: "observe",
-  },
-  "stake-roulette": {
-    lobbySearchText: "Stake Roulette",
-    getBettingConfig: () => pragmaticRouletteBettingSelectors({ fortuneTimerBettingOpen: false }),
-    defaultAuthUrl: DEFAULT_AUTH_URL_GAMES,
-    defaultCasinoUser: "abdulg",
-    defaultCasinoPass: "abdulg123",
-    lobbyReadyTestIds: [...PRAGMATIC_LOBBY_READY_TESTIDS],
-    lobbySearchTriggerTestId: "lobby-category-search",
-    automationMode: "observe",
-  },
   "color-game-bonanza": {
     lobbySearchText: "Color Game Bonanza",
     getBettingConfig: colorGameBonanzaBettingSelectors,

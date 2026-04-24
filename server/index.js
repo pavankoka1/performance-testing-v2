@@ -36,8 +36,10 @@ app.post("/api/start", async (req, res) => {
       url,
       cpuThrottle = 1,
       networkThrottle = "none",
-      trackReactRerenders = false,
       recordVideo = true,
+      videoQuality = "high",
+      traceDetail = "full",
+      assetGameKeys = [],
       automation,
     } = req.body || {};
     if (!url || typeof url !== "string") {
@@ -78,8 +80,10 @@ app.post("/api/start", async (req, res) => {
       url,
       cpuThrottle,
       netPreset,
-      !!trackReactRerenders,
       recordVideo !== false,
+      videoQuality,
+      traceDetail,
+      assetGameKeys,
       automationOpts
     );
     return res.json(result);
@@ -139,10 +143,32 @@ app.get("/api/metrics", async (req, res) => {
 app.get("/api/video", async (req, res) => {
   try {
     const videoData = await getLatestVideo();
-    return res
-      .set("Content-Type", videoData.contentType)
-      .set("Cache-Control", "no-store")
-      .send(videoData.data);
+    res.set("Content-Type", videoData.contentType);
+    res.set("Cache-Control", "no-store");
+    fs.createReadStream(videoData.path).pipe(res);
+  } catch {
+    return res.status(404).json({ error: "Video not available." });
+  }
+});
+
+// API: Video download (forces "Save as...")
+app.get("/api/video/download", async (req, res) => {
+  try {
+    const videoData = await getLatestVideo();
+    res.set("Content-Type", videoData.contentType);
+    res.set("Cache-Control", "no-store");
+    const ts = (() => {
+      try {
+        return new Date(videoData.startedAt).toISOString().slice(0, 19).replace(/[:-]/g, "");
+      } catch {
+        return new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
+      }
+    })();
+    res.set(
+      "Content-Disposition",
+      `attachment; filename="perftrace-session-${ts}.webm"`
+    );
+    fs.createReadStream(videoData.path).pipe(res);
   } catch {
     return res.status(404).json({ error: "Video not available." });
   }
@@ -165,7 +191,7 @@ function startServer(port = PORT) {
     const server = app.listen(port, () => {
       console.log(`PerfTrace server running at http://localhost:${port}`);
       console.log(
-        "API: POST /api/start, POST /api/stop, GET /api/session, GET /api/metrics, GET /api/video"
+        "API: POST /api/start, POST /api/stop, GET /api/session, GET /api/metrics, GET /api/video, GET /api/video/download"
       );
       resolve(server);
     });

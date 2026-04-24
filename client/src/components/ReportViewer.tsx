@@ -36,7 +36,6 @@ import AnimationTimeline from "./AnimationTimeline";
 import DownloadedAssetsModal from "./DownloadedAssetsModal";
 import GraphModal from "./GraphModal";
 import MetricChart from "./MetricChart";
-import ReactRerendersSection from "./ReactRerendersSection";
 import TbtTimelineChart from "./TbtTimelineChart";
 import SessionVideoPlayer from "./SessionVideoPlayer";
 
@@ -725,30 +724,6 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
         </div>
       )}
 
-      {report.developerHints?.reactRerenders && (
-        <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-6">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <h3 className="text-lg font-semibold text-[var(--fg)]">
-              React re-renders
-            </h3>
-            <button
-              type="button"
-              onClick={() => onOpenHelp?.("react-rerenders")}
-              className="cursor-pointer rounded p-1 text-[var(--fg-muted)] transition hover:bg-[var(--bg-card)] hover:text-[var(--accent)]"
-              title="Learn about this metric"
-              aria-label="Learn about React re-renders"
-            >
-              <HelpCircle className="h-4 w-4" />
-            </button>
-          </div>
-          <ReactRerendersSection
-            data={report.developerHints.reactRerenders}
-            durationSec={durationSec}
-            formatNumber={formatNumber}
-          />
-        </div>
-      )}
-
       {(report.suggestions?.length ?? 0) > 0 && (
         <div className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--fg)]">
@@ -795,6 +770,13 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
                 session window). Playback stops at the report end.
               </p>
             </div>
+            <a
+              href="/api/video/download"
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--fg-muted)] transition hover:border-[var(--accent)]/50 hover:bg-[var(--accent-dim)]"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download video
+            </a>
             <p className="max-w-sm text-[11px] leading-relaxed text-[var(--fg-muted)]">
               <span className="font-medium text-[var(--fg)]">Controls:</span>{" "}
               Space play/pause ·{" "}

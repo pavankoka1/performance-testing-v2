@@ -11,8 +11,7 @@ import ReportViewer from "./ReportViewer";
 import WebglBackground from "./WebglBackground";
 
 export default function Dashboard() {
-  const { isRecording, isProcessing, report, streamUrl, start, stop } =
-    useRecording();
+  const { isRecording, isProcessing, report, start, stop } = useRecording();
   const { enabled: webglBgEnabled, setEnabled: setWebglBgEnabled } =
     useWebglBackgroundPreference();
   const [helpModalMetricId, setHelpModalMetricId] = useState<string | null>(
@@ -65,7 +64,7 @@ export default function Dashboard() {
               </label>
               <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2 text-sm text-[var(--fg-muted)]">
                 <ShieldCheck className="h-4 w-4 text-violet-400" />
-                Chromium + Playwright + VNC
+                Chromium + Playwright
               </div>
             </div>
           </div>
@@ -75,7 +74,6 @@ export default function Dashboard() {
           <RecordFormSection
             isRecording={isRecording}
             isProcessing={isProcessing}
-            streamUrl={streamUrl}
             onStart={start}
             onStop={stop}
           />

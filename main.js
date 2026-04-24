@@ -6,12 +6,9 @@ const { app, BrowserWindow, session } = require("electron");
 
 /**
  * Must run before the GPU process starts. Avoids ANGLE/Metal pipeline XPC failures on macOS.
- * Opt out: PERFTRACE_ANGLE_METAL=1
+ * Only force OpenGL if explicitly requested.
  */
-if (
-  process.platform === "darwin" &&
-  process.env.PERFTRACE_ANGLE_METAL !== "1"
-) {
+if (process.platform === "darwin" && process.env.PERFTRACE_FORCE_ANGLE_GL === "1") {
   app.commandLine.appendSwitch("use-angle", "gl");
 }
 

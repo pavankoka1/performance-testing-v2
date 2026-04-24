@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 
 type CpuThrottle = 1 | 4 | 6 | 20;
+export type TraceDetail = "light" | "full";
 
 /** Must match server `NETWORK_PRESETS` keys in capture.js */
 export type NetworkThrottlePreset =
@@ -12,8 +13,6 @@ export type NetworkThrottlePreset =
   | "4g";
 
 export type AutomationGameId =
-  | "russian-roulette"
-  | "stake-roulette"
   | "color-game-bonanza";
 
 export type AutomationStartPayload = {
@@ -27,9 +26,14 @@ export type AutomationStartPayload = {
 };
 
 export type RecordingStartOptions = {
-  /** Default true. Disable for long sessions to avoid Playwright video issues. */
+  /** Defaults to true in the UI. */
   recordVideo?: boolean;
-  trackReactRerenders?: boolean;
+  /** Recording resolution preset (impacts CPU). */
+  videoQuality?: "low" | "high";
+  /** Comma-separated keys; URLs containing any key count as "game" assets. */
+  assetGameKeys?: string[];
+  /** Tracing detail: "light" is lower overhead. */
+  traceDetail?: TraceDetail;
   /** Pragmatic Live: login → lobby → game → N rounds; server stops trace when done. */
   automation?: AutomationStartPayload;
 };
@@ -47,7 +51,6 @@ export function useRecording() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [report, setReport] = useState<PerfReport | null>(null);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const stopAbortRef = useRef<AbortController | null>(null);
   const automationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -76,7 +79,6 @@ export function useRecording() {
       clearAutomationPoll();
       setIsRecording(true);
       setReport(null);
-      setStreamUrl(null);
 
       try {
         const automationBody =
@@ -118,8 +120,10 @@ export function useRecording() {
             url,
             cpuThrottle,
             networkThrottle: netOk,
-            trackReactRerenders: !!options?.trackReactRerenders,
             recordVideo: options?.recordVideo !== false,
+            videoQuality: options?.videoQuality ?? "high",
+            traceDetail: options?.traceDetail ?? "full",
+            assetGameKeys: options?.assetGameKeys ?? [],
             automation: automationBody,
           }),
         });
@@ -135,11 +139,6 @@ export function useRecording() {
         if (auto?.enabled) {
           toast.success(
             "Automated script running — report appears when rounds complete."
-          );
-        } else if (data.streamUrl) {
-          setStreamUrl(data.streamUrl as string);
-          toast.success(
-            "Recording started. Open the VNC stream to interact with the browser."
           );
         } else {
           toast.success("Recording started. Browser session is active.");
@@ -159,7 +158,6 @@ export function useRecording() {
                 setReport(s.report as PerfReport);
                 setIsRecording(false);
                 setIsProcessing(false);
-                setStreamUrl(null);
                 const errMsg =
                   typeof s.error === "string" ? s.error : undefined;
                 if (errMsg) {
@@ -195,7 +193,6 @@ export function useRecording() {
   const stop = useCallback(async () => {
     clearAutomationPoll();
     setIsRecording(false);
-    setStreamUrl(null);
     setIsProcessing(true);
     stopAbortRef.current?.abort();
     const controller = new AbortController();
@@ -234,5 +231,5 @@ export function useRecording() {
     }
   }, []);
 
-  return { isRecording, isProcessing, report, streamUrl, start, stop };
+  return { isRecording, isProcessing, report, start, stop };
 }

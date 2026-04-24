@@ -1,14 +1,13 @@
 # PerfTrace v2 — Self-Hosted Performance Testing
 
-A self-hosted performance testing tool with **Playwright**, **Xvfb**, and **noVNC** streaming. Enter a URL, interact with the browser via VNC (when enabled), stop the session, and get a comprehensive performance report.
+A self-hosted performance testing tool with **Playwright** + CDP tracing. Enter a URL, start a session, stop when done, and get a performance report (optionally with a downloadable session video).
 
 ## Architecture
 
 - **Backend**: Node.js + Express
 - **Browser automation**: Playwright (Chromium + CDP tracing)
-- **Virtual display** (Linux): Xvfb for headless graphics
-- **Streaming** (Linux): x11vnc + websockify + noVNC for remote interaction
 - **Metrics**: CDP tracing, Performance.getMetrics, client-side collectors (FPS, Web Vitals)
+- **Video (optional)**: Playwright `recordVideo` → view in report + download
 
 ## Project Structure
 
@@ -41,26 +40,6 @@ npm run dev
 
 On macOS, VNC streaming is not available (Xvfb is Linux-only). The app runs in headless mode—metrics are captured but you cannot interact with the browser. For full VNC support, use a Linux VPS or Docker.
 
-### Production (Linux with VNC)
-
-1. **Install system dependencies** (Ubuntu/Debian):
-
-   ```bash
-   sudo apt update
-   sudo apt install -y xvfb x11vnc
-   pip install websockify   # or: sudo apt install websockify
-   ```
-
-2. **Enable VNC and run**:
-
-   ```bash
-   export VNC_ENABLED=true
-   npm run build
-   npm start
-   ```
-
-3. Open the app. When you start a recording, a **VNC stream URL** appears—open it in a new tab to interact with the browser.
-
 ### Production (headless only)
 
 ```bash
@@ -72,19 +51,20 @@ PORT=3000 npm start
 
 | Method | Path         | Description                                                                                                           |
 | ------ | ------------ | --------------------------------------------------------------------------------------------------------------------- |
-| POST   | /api/start   | Start recording (body: `{ url, cpuThrottle?, trackReactRerenders?, recordVideo? }`; `recordVideo` defaults to `true`) |
+| POST   | /api/start   | Start recording (body: `{ url, cpuThrottle?, networkThrottle?, recordVideo?, videoQuality?, traceDetail? }`; `recordVideo` defaults to `true`) |
 | POST   | /api/stop    | Stop recording, return report                                                                                         |
 | GET    | /api/metrics | Live metrics during recording                                                                                         |
 | GET    | /api/video   | Session video (WebM)                                                                                                  |
+| GET    | /api/video/download | Download session video (WebM)                                                                                  |
 
 ## Environment Variables
 
 | Variable       | Default | Description                                              |
 | -------------- | ------- | -------------------------------------------------------- |
 | `PORT`         | 3000    | Server port                                              |
-| `VNC_ENABLED`  | false   | Enable Xvfb + VNC (Linux only)                           |
-| `XVFB_DISPLAY` | 99      | Xvfb display number when VNC_ENABLED=true                |
-| `PUBLIC_URL`   | -       | Base URL for VNC stream link (e.g. https://your-vps.com) |
+| `HEADLESS`     | false   | Set `true` for servers/CI with no display                |
+| `PERFTRACE_DISABLE_GPU` | false | (macOS) disable GPU if you must (hurts FPS)       |
+| `PERFTRACE_FORCE_ANGLE_GL` | false | (macOS/Electron) force OpenGL (only if Metal issues) |
 
 ## Deployment (VPS)
 
@@ -185,7 +165,7 @@ docker run -p 3000:3000 -e VNC_ENABLED=true -e PUBLIC_URL=http://localhost:3000 
 3. Set env vars: `VNC_ENABLED=true`, `PUBLIC_URL=https://your-app.up.railway.app`
 4. Deploy. The app serves on `PORT` (Railway sets this automatically).
 
-**Note:** VNC streaming requires port 6080 for websockify. If your platform only exposes one port, use `HEADLESS=true` instead—metrics still work, but you won't get the remote browser stream.
+**Note:** For best FPS accuracy, run in headed mode on a machine with a display and keep GPU enabled.
 
 ## License
 

@@ -6,9 +6,7 @@ const { randomUUID } = require("crypto");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
 const { chromium } = require("playwright");
-const yauzl = require("yauzl");
 const {
   parseTraceToReport,
   computeClsFromEntries,
@@ -116,13 +114,8 @@ function categorizeAsset(
   return "other";
 }
 
-function buildDownloadedAssetsSummary(
-  resourceEntries,
-  navigationEntries,
-  networkRequests,
-  fcpMs
-) {
-  const byCategory = {
+function buildEmptyAssetsByCategory() {
+  return {
     build: { count: 0, totalBytes: 0, files: [] },
     script: { count: 0, totalBytes: 0, files: [] },
     stylesheet: { count: 0, totalBytes: 0, files: [] },
@@ -132,7 +125,47 @@ function buildDownloadedAssetsSummary(
     font: { count: 0, totalBytes: 0, files: [] },
     other: { count: 0, totalBytes: 0, files: [] },
   };
-  const seen = new Set();
+}
+
+function normalizeAssetKey(url) {
+  return (url || "").split("?")[0];
+}
+
+function inferAssetScope(url, gameAssetKeys) {
+  const keys = Array.isArray(gameAssetKeys) ? gameAssetKeys : [];
+  if (!keys.length) return "common";
+  const u = String(url || "").toLowerCase();
+  for (const k of keys) {
+    const key = String(k || "").trim().toLowerCase();
+    if (!key) continue;
+    if (u.includes(key)) return "game";
+  }
+  return "common";
+}
+
+function computeTotals(byCategory) {
+  let totalBytes = 0;
+  let totalCount = 0;
+  for (const cat of Object.keys(byCategory)) {
+    totalBytes += byCategory[cat].totalBytes;
+    totalCount += byCategory[cat].count;
+  }
+  return { totalBytes, totalCount };
+}
+
+function buildDownloadedAssetsSummary(
+  resourceEntries,
+  navigationEntries,
+  networkRequests,
+  fcpMs,
+  gameAssetKeys = []
+) {
+  const byCategoryAll = buildEmptyAssetsByCategory();
+  const byCategoryGame = buildEmptyAssetsByCategory();
+  const byCategoryCommon = buildEmptyAssetsByCategory();
+
+  const seenUnique = new Set();
+  const occurrences = new Map(); // key -> { count, exampleUrl, totalBytes }
   let mainDocUrl = null;
 
   if (!navigationEntries?.length && networkRequests?.length > 0) {
@@ -143,92 +176,164 @@ function buildDownloadedAssetsSummary(
       const url = firstDoc.url || "";
       mainDocUrl = url;
       const size = firstDoc.transferSize ?? 0;
-      const key = url.split("?")[0];
-      seen.add("nav:" + key);
-      seen.add(key);
-      byCategory.build.count++;
-      byCategory.build.totalBytes += size;
-      byCategory.build.files.push({
-        url,
-        category: "build",
-        transferSize: size > 0 ? size : undefined,
-        durationMs: firstDoc.durationMs,
+      const key = normalizeAssetKey(url);
+      seenUnique.add("nav:" + key);
+      seenUnique.add(key);
+      const scope = inferAssetScope(url, gameAssetKeys);
+
+      const add = (bucket) => {
+        bucket.build.count++;
+        bucket.build.totalBytes += size;
+        bucket.build.files.push({
+          url,
+          category: "build",
+          transferSize: size > 0 ? size : undefined,
+          durationMs: firstDoc.durationMs,
+        });
+      };
+      add(byCategoryAll);
+      add(scope === "game" ? byCategoryGame : byCategoryCommon);
+
+      occurrences.set(key, {
+        count: 1,
+        exampleUrl: url,
+        totalBytes: size > 0 ? size : 0,
       });
     }
   }
 
   for (const e of navigationEntries || []) {
     const url = e.url || "";
-    const key = "nav:" + url.split("?")[0];
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const key = "nav:" + normalizeAssetKey(url);
+    if (seenUnique.has(key)) continue;
+    seenUnique.add(key);
     mainDocUrl = url;
     const size = e.transferSize ?? e.encodedBodySize ?? 0;
+    const scope = inferAssetScope(url, gameAssetKeys);
     const asset = {
       url,
       category: "build",
       transferSize: size > 0 ? size : undefined,
       durationMs: e.duration > 0 ? e.duration : undefined,
     };
-    byCategory.build.count++;
-    byCategory.build.totalBytes += size;
-    byCategory.build.files.push(asset);
+    const add = (bucket) => {
+      bucket.build.count++;
+      bucket.build.totalBytes += size;
+      bucket.build.files.push(asset);
+    };
+    add(byCategoryAll);
+    add(scope === "game" ? byCategoryGame : byCategoryCommon);
   }
 
   for (const e of resourceEntries || []) {
     const url = e.url || "";
-    const key = url.split("?")[0];
-    if (seen.has(key)) continue;
+    const key = normalizeAssetKey(url);
+    const curOcc = occurrences.get(key) || {
+      count: 0,
+      exampleUrl: url,
+      totalBytes: 0,
+    };
+    curOcc.count += 1;
+    curOcc.exampleUrl = curOcc.exampleUrl || url;
+    curOcc.totalBytes += e.transferSize ?? e.encodedBodySize ?? 0;
+    occurrences.set(key, curOcc);
+
+    if (seenUnique.has(key)) continue;
     if (url === mainDocUrl) continue;
-    seen.add(key);
+    seenUnique.add(key);
     const size = e.transferSize ?? e.encodedBodySize ?? 0;
     const cat = categorizeAsset(url, e.initiatorType, "", false);
+    const scope = inferAssetScope(url, gameAssetKeys);
     const asset = {
       url,
       category: cat,
       transferSize: size > 0 ? size : undefined,
       durationMs: e.duration > 0 ? e.duration : undefined,
     };
-    byCategory[cat].count++;
-    byCategory[cat].totalBytes += size;
-    byCategory[cat].files.push(asset);
+    const add = (bucket) => {
+      bucket[cat].count++;
+      bucket[cat].totalBytes += size;
+      bucket[cat].files.push(asset);
+    };
+    add(byCategoryAll);
+    add(scope === "game" ? byCategoryGame : byCategoryCommon);
   }
   for (const r of networkRequests || []) {
     const url = r.url || "";
-    const key = url.split("?")[0];
-    if (seen.has(key)) continue;
+    const key = normalizeAssetKey(url);
+    const curOcc = occurrences.get(key) || {
+      count: 0,
+      exampleUrl: url,
+      totalBytes: 0,
+    };
+    curOcc.count += 1;
+    curOcc.exampleUrl = curOcc.exampleUrl || url;
+    curOcc.totalBytes += r.transferSize ?? 0;
+    occurrences.set(key, curOcc);
+
+    if (seenUnique.has(key)) continue;
     const size = r.transferSize ?? 0;
     if (size <= 0) continue;
     const navKey = "nav:" + key;
-    if (seen.has(navKey)) continue;
-    seen.add(key);
+    if (seenUnique.has(navKey)) continue;
+    seenUnique.add(key);
     const cat = categorizeAsset(url, "", r.type, false);
+    const scope = inferAssetScope(url, gameAssetKeys);
     const asset = {
       url,
       category: cat,
       transferSize: size,
       durationMs: r.durationMs,
     };
-    byCategory[cat].count++;
-    byCategory[cat].totalBytes += size;
-    byCategory[cat].files.push(asset);
+    const add = (bucket) => {
+      bucket[cat].count++;
+      bucket[cat].totalBytes += size;
+      bucket[cat].files.push(asset);
+    };
+    add(byCategoryAll);
+    add(scope === "game" ? byCategoryGame : byCategoryCommon);
   }
-  let totalBytes = 0;
-  let totalCount = 0;
-  for (const cat of Object.keys(byCategory)) {
-    totalBytes += byCategory[cat].totalBytes;
-    totalCount += byCategory[cat].count;
+
+  const { totalBytes, totalCount } = computeTotals(byCategoryAll);
+  const gameTotals = computeTotals(byCategoryGame);
+  const commonTotals = computeTotals(byCategoryCommon);
+
+  const initialLoadBytes = computeInitialLoadBytes(byCategoryAll, resourceEntries, fcpMs);
+
+  const duplicates = [];
+  for (const [key, info] of occurrences.entries()) {
+    if (info.count > 1) {
+      duplicates.push({
+        url: info.exampleUrl || key,
+        normalizedUrl: key,
+        count: info.count,
+        totalBytes: info.totalBytes || 0,
+      });
+    }
   }
-  const initialLoadBytes = computeInitialLoadBytes(
-    byCategory,
-    resourceEntries,
-    fcpMs
-  );
+  duplicates.sort((a, b) => b.totalBytes - a.totalBytes || b.count - a.count);
+
   return {
-    byCategory,
+    byCategory: byCategoryAll,
+    byScope: {
+      all: {
+        byCategory: byCategoryAll,
+        ...computeTotals(byCategoryAll),
+      },
+      game: {
+        byCategory: byCategoryGame,
+        ...gameTotals,
+      },
+      common: {
+        byCategory: byCategoryCommon,
+        ...commonTotals,
+      },
+    },
     totalBytes,
     totalCount,
     initialLoadBytes,
+    duplicates,
+    gameAssetKeys: Array.isArray(gameAssetKeys) ? gameAssetKeys : [],
     /** Alias: everything transferred during the session */
     sessionTotalBytes: totalBytes,
   };
@@ -581,19 +686,15 @@ function inferBottleneck(properties, animationName) {
   return undefined;
 }
 
-const VNC_ENABLED = process.env.VNC_ENABLED === "true";
-const DISPLAY_NUM = process.env.XVFB_DISPLAY || "99";
+// VNC streaming removed: keep capture simple (record video + download).
 const VIEWPORT_WIDTH = 1366;
 const VIEWPORT_HEIGHT = 768;
 
 let activeSession = null;
-let lastVideoPath = null;
+let lastVideo = null;
 let reportGenerationInProgress = false;
 let cachedSessionReport = null;
 let lastAutomationError = null;
-let xvfbProcess = null;
-let vncProcess = null;
-let websockifyProcess = null;
 
 function ensureValidUrl(value) {
   let parsed;
@@ -606,75 +707,6 @@ function ensureValidUrl(value) {
     throw new Error("Only http and https URLs are supported.");
   }
   return parsed.toString();
-}
-
-async function startXvfb() {
-  if (xvfbProcess) return;
-  return new Promise((resolve, reject) => {
-    xvfbProcess = spawn(
-      "Xvfb",
-      [`:${DISPLAY_NUM}`, "-screen", "0", "1280x720x24"],
-      {
-        stdio: "ignore",
-        detached: true,
-      }
-    );
-    xvfbProcess.on("error", reject);
-    xvfbProcess.unref();
-    setTimeout(resolve, 500);
-  });
-}
-
-async function startVnc() {
-  if (vncProcess) return;
-  return new Promise((resolve, reject) => {
-    vncProcess = spawn(
-      "x11vnc",
-      [
-        "-display",
-        `:${DISPLAY_NUM}`,
-        "-forever",
-        "-shared",
-        "-rfbport",
-        "5900",
-      ],
-      {
-        stdio: "ignore",
-        detached: true,
-      }
-    );
-    vncProcess.on("error", reject);
-    vncProcess.unref();
-    setTimeout(resolve, 800);
-  });
-}
-
-async function startWebsockify() {
-  if (websockifyProcess) return;
-  const novncPath = path.join(__dirname, "../../node_modules/@novnc/novnc");
-  const hasNovnc = await fs
-    .access(path.join(novncPath, "vnc.html"))
-    .then(() => true)
-    .catch(() => false);
-  const webPath = hasNovnc
-    ? novncPath
-    : path.join(__dirname, "../../client/public/novnc");
-  return new Promise((resolve, reject) => {
-    const args = ["6080", "localhost:5900"];
-    if (hasNovnc) args.unshift("--web", webPath);
-    websockifyProcess = spawn("websockify", args, {
-      stdio: "ignore",
-      detached: true,
-    });
-    websockifyProcess.on("error", (err) => {
-      console.warn(
-        "[PerfTrace] websockify not found; VNC stream URL may not work. Install: pip install websockify"
-      );
-      resolve();
-    });
-    websockifyProcess.unref();
-    setTimeout(resolve, 500);
-  });
 }
 
 async function getLaunchOptions() {
@@ -695,40 +727,15 @@ async function getLaunchOptions() {
       );
     }
   }
-  const useVnc = VNC_ENABLED && process.platform === "linux";
-  if (useVnc) {
-    try {
-      await startXvfb();
-      await startVnc();
-      await startWebsockify();
-      process.env.DISPLAY = `:${DISPLAY_NUM}`;
-      return {
-        headless: false,
-        args: [
-          `--display=:${DISPLAY_NUM}`,
-          "--enable-gpu",
-          "--disable-dev-shm-usage",
-          "--window-size=1280,720",
-        ],
-        defaultViewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-      };
-    } catch (err) {
-      console.warn(
-        "[PerfTrace] VNC setup failed, falling back to headless:",
-        err.message
-      );
-    }
-  }
   // Use headed mode so the user can see and interact with the browser.
   // Set HEADLESS=true for remote servers / CI (no display).
   const headless = process.env.HEADLESS === "true";
   /**
-   * On macOS, Chromium’s GPU process often floods stderr with harmless EGL errors (eglQueryDeviceAttribEXT).
-   * `--disable-gpu` stops that without the heavier flags (e.g. SwiftShader) that can break a headed window.
-   * For real GPU profiling, set PERFTRACE_KEEP_GPU=true (expect the noise back).
+   * Keep GPU ON by default for smoother headed rendering on macOS.
+   * If stderr GPU/EGL logs are too noisy, allow explicitly disabling via env.
    */
-  const macGpuNoise =
-    process.platform === "darwin" && process.env.PERFTRACE_KEEP_GPU !== "true"
+  const macGpuFlags =
+    process.platform === "darwin" && process.env.PERFTRACE_DISABLE_GPU === "true"
       ? ["--disable-gpu"]
       : [];
   return {
@@ -737,7 +744,7 @@ async function getLaunchOptions() {
       "--disable-dev-shm-usage",
       "--window-size=1366,768",
       "--window-position=0,0",
-      ...macGpuNoise,
+      ...macGpuFlags,
     ],
     defaultViewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
   };
@@ -1065,8 +1072,10 @@ async function createCaptureSession(
   url,
   cpuThrottle = 1,
   networkThrottle = "none",
-  trackReactRerenders = false,
   recordVideo = true,
+  videoQuality = "high",
+  traceDetail = "full",
+  assetGameKeys = [],
   automationOpts = null
 ) {
   if (activeSession) {
@@ -1080,19 +1089,25 @@ async function createCaptureSession(
   const launchOptions = await getLaunchOptions();
   const videoDir = path.join(os.tmpdir(), "perftrace-videos");
   await fs.mkdir(videoDir, { recursive: true });
-  if (lastVideoPath) {
-    await fs.unlink(lastVideoPath).catch(() => {});
-    lastVideoPath = null;
+  // Cleanup previous session video + old artifacts.
+  if (lastVideo?.path) {
+    await fs.unlink(lastVideo.path).catch(() => {});
+    lastVideo = null;
   }
+  await cleanupOldVideos(videoDir).catch(() => {});
 
   const browser = await chromium.launch(launchOptions);
+  const videoSize =
+    videoQuality === "low"
+      ? { width: 960, height: 540 }
+      : { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT };
   const context = await browser.newContext({
     viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
     ...(recordVideo
       ? {
           recordVideo: {
             dir: videoDir,
-            size: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+            size: videoSize,
           },
         }
       : {}),
@@ -1143,34 +1158,34 @@ async function createCaptureSession(
       });
     });
   } catch {}
+  const traceCategories =
+    traceDetail === "light"
+      ? [
+          // Enough for CPU/layout/paint-ish signals without deep GPU categories.
+          "devtools.timeline",
+          "blink.user_timing",
+          "blink.resource",
+          "v8",
+        ]
+      : [
+          "devtools.timeline",
+          "disabled-by-default-devtools.timeline",
+          "disabled-by-default-devtools.timeline.frame",
+          "disabled-by-default-devtools.timeline.paint",
+          "disabled-by-default-devtools.timeline.layers",
+          "disabled-by-default-devtools.timeline.stack",
+          "blink.user_timing",
+          "blink.resource",
+          "v8",
+          "gpu",
+          "cc",
+          "latencyInfo",
+          "disabled-by-default-gpu.service",
+        ];
   await traceCdp.send("Tracing.start", {
-    categories: [
-      "devtools.timeline",
-      "disabled-by-default-devtools.timeline",
-      "disabled-by-default-devtools.timeline.frame",
-      "disabled-by-default-devtools.timeline.paint",
-      "disabled-by-default-devtools.timeline.layers",
-      "disabled-by-default-devtools.timeline.stack",
-      "blink.user_timing",
-      "blink.resource",
-      "v8",
-      "gpu",
-      "cc",
-      "latencyInfo",
-      "disabled-by-default-gpu.service",
-    ].join(","),
+    categories: traceCategories.join(","),
     transferMode: "ReturnAsStream",
   });
-
-  let rrtClient = null;
-  if (trackReactRerenders) {
-    try {
-      const newTrackerClient = (
-        await import("react-render-tracker/headless-browser-client")
-      ).default;
-      rrtClient = await newTrackerClient(page);
-    } catch {}
-  }
 
   await page.goto(safeUrl, { waitUntil: "domcontentloaded" });
   await ensureFpsCollector(page);
@@ -1293,7 +1308,8 @@ async function createCaptureSession(
     sampleInterval,
     cpuThrottle,
     networkThrottle: networkThrottlePreset,
-    rrtClient,
+    traceDetail,
+    assetGameKeys: Array.isArray(assetGameKeys) ? assetGameKeys : [],
     collectedAnimations,
     lastPerfTotals: undefined,
   };
@@ -1308,7 +1324,7 @@ async function createCaptureSession(
     const ac = new AbortController();
     activeSession.automationAbort = ac;
     const rounds = normalizeAutomationRounds(automationOpts.rounds);
-    const gameId = automationOpts.gameId || "russian-roulette";
+    const gameId = automationOpts.gameId || "color-game-bonanza";
     const gameMeta = getAutomationGame(gameId);
     activeSession.automation = {
       gameId,
@@ -1348,21 +1364,13 @@ async function createCaptureSession(
       });
   }
 
-  const baseUrl =
-    process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
-  const streamUrl =
-    VNC_ENABLED && process.platform === "linux"
-      ? `${baseUrl.replace(/:\d+$/, "")}:6080/vnc.html`
-      : null;
-
   return {
     status: "recording",
     url: safeUrl,
-    streamUrl,
     automation: automationOpts?.enabled
       ? {
           enabled: true,
-          gameId: activeSession.automation?.gameId ?? "russian-roulette",
+          gameId: activeSession.automation?.gameId ?? "color-game-bonanza",
           rounds: activeSession.automation?.rounds ?? 1,
           skipLobby: !!automationOpts.skipLobby,
         }
@@ -1409,7 +1417,7 @@ async function stopCaptureSession(opts = {}) {
       fpsSamples,
       networkRequests,
       sampleInterval,
-      rrtClient,
+      assetGameKeys = [],
       collectedAnimations = [],
     } = activeSession;
     activeSession = null;
@@ -1452,54 +1460,6 @@ async function stopCaptureSession(opts = {}) {
     clientAnimationProps =
       (await page.evaluate(() => window.__perftraceAnimationProps ?? [])) || [];
   } catch {}
-
-  let reactRerenderHint = null;
-  if (rrtClient) {
-    try {
-      const events = await Promise.race([
-        rrtClient.getEvents().then((e) => e || []),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("RRT_TIMEOUT")), 12_000)
-        ),
-      ]).catch(() => []);
-      const durationMs = Date.now() - startedAt;
-      const durationSec = durationMs / 1000;
-      const byComponent = new Map();
-      for (const e of events) {
-        const name =
-          e.fiber?.type?.displayName ||
-          e.fiber?.type?.name ||
-          e.name ||
-          e.componentName ||
-          `Component#${e.fiberId ?? e.id ?? "?"}`;
-        const cur = byComponent.get(name) || { count: 0 };
-        cur.count += 1;
-        byComponent.set(name, cur);
-      }
-      if (byComponent.size > 0) {
-        reactRerenderHint = {
-          totalEvents: events.length,
-          durationSec,
-          components: [...byComponent.entries()].map(([name, data]) => ({
-            name,
-            renderCount: data.count,
-            inBursts: 0,
-          })),
-          topRerenderers: [...byComponent.entries()]
-            .sort((a, b) => b[1].count - a[1].count)
-            .slice(0, 15)
-            .map(([name, data]) => ({
-              name,
-              count: data.count,
-              inBursts: 0,
-            })),
-          chartData: [],
-          timeline: [],
-          bursts: [],
-        };
-      }
-    } catch {}
-  }
 
   const stopRequestedAt = Date.now();
 
@@ -1544,7 +1504,11 @@ async function stopCaptureSession(opts = {}) {
   }
   if (candidates.length > 0) {
     candidates.sort((a, b) => b.size - a.size);
-    lastVideoPath = candidates[0].path;
+    lastVideo = {
+      path: candidates[0].path,
+      startedAt,
+      recordedUrl: recordedUrl ?? null,
+    };
   }
 
   const traceText = "";
@@ -1589,14 +1553,15 @@ async function stopCaptureSession(opts = {}) {
     });
   }
 
-  report.video = lastVideoPath ? { url: "/api/video", format: "webm" } : null;
+  report.video = lastVideo ? { url: "/api/video", format: "webm" } : null;
   report.recordedUrl = recordedUrl ?? null;
 
   report.downloadedAssets = buildDownloadedAssetsSummary(
     resourceEntries,
     navigationEntries,
     networkRequests,
-    clientCollector?.fcp
+    clientCollector?.fcp,
+    assetGameKeys
   );
 
   const mainThreadBlockedMs = report.webVitals?.tbtMs ?? 0;
@@ -1634,12 +1599,6 @@ async function stopCaptureSession(opts = {}) {
       domPoints.length > 0 ? Math.max(...domPoints.map((p) => p.value)) : 0,
   };
 
-  if (reactRerenderHint) {
-    report.developerHints = {
-      ...report.developerHints,
-      reactRerenders: reactRerenderHint,
-    };
-  }
   const clientAnims = (clientAnimationProps || []).map((a) => {
     const propName =
       a.properties?.length && a.properties[0]
@@ -1867,9 +1826,44 @@ async function getLiveMetrics() {
 }
 
 async function getLatestVideo() {
-  if (!lastVideoPath) throw new Error("No video available.");
-  const data = await fs.readFile(lastVideoPath);
-  return { data, contentType: "video/webm" };
+  if (!lastVideo?.path) throw new Error("No video available.");
+  return {
+    path: lastVideo.path,
+    contentType: "video/webm",
+    startedAt: lastVideo.startedAt,
+    recordedUrl: lastVideo.recordedUrl,
+  };
+}
+
+async function cleanupOldVideos(videoDir) {
+  // Keep the last few artifacts; remove very old files to prevent /tmp bloat.
+  const entries = await fs.readdir(videoDir).catch(() => []);
+  if (!entries.length) return;
+  const now = Date.now();
+  const MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+  const MAX_KEEP = 12;
+
+  const stats = [];
+  for (const name of entries) {
+    if (!name.toLowerCase().endsWith(".webm")) continue;
+    const full = path.join(videoDir, name);
+    try {
+      const st = await fs.stat(full);
+      stats.push({ path: full, mtimeMs: st.mtimeMs });
+    } catch {
+      /* ignore */
+    }
+  }
+  stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const toDelete = [];
+  for (let i = 0; i < stats.length; i++) {
+    const f = stats[i];
+    const tooOld = now - f.mtimeMs > MAX_AGE_MS;
+    const beyondKeep = i >= MAX_KEEP;
+    if (tooOld || beyondKeep) toDelete.push(f.path);
+  }
+  await Promise.all(toDelete.map((p) => fs.unlink(p).catch(() => {})));
 }
 
 function getSessionSnapshot() {

@@ -32,8 +32,8 @@ const BENTO = [
   {
     span: "span-3",
     icon: "📡",
-    title: "Live dashboard + VNC when you need hands-on",
-    body: "Watch FPS, CPU, and heap update while you record. On Linux with Xvfb, open the noVNC stream to click, scroll, and drive the session remotely — perfect for VPS or Docker deployments.",
+    title: "Live dashboard while you record",
+    body: "Watch FPS, CPU, and heap update while you record. Stop the session and you get a dense report plus an optional downloadable session video (WebM) for playback and sharing.",
   },
   {
     span: "span-2",
@@ -72,7 +72,7 @@ const PIPELINE = [
   },
   {
     title: "Interact",
-    desc: "Use the in-window preview or the VNC link (Linux) to exercise flows — scrolls, route changes, animations — while data streams in.",
+    desc: "Exercise flows — scrolls, route changes, animations — while data streams in.",
   },
   {
     title: "Stop → report",
@@ -88,7 +88,6 @@ const STACK = [
   "React 18 (UI)",
   "Vite",
   "Docker-ready",
-  "noVNC / websockify",
 ];
 
 function useDownloads() {
@@ -165,7 +164,7 @@ export default function App() {
             <p className="hero-sub">
               PerfTrace is a desktop performance studio: launch any URL in real
               Chromium, throttle the CPU, record CDP traces, stream optional
-              VNC, and walk away with a dense report — FPS, Web Vitals, assets,
+              video, and walk away with a dense report — FPS, Web Vitals, assets,
               long tasks, and more — without sending your product traffic to a
               SaaS black box.
             </p>
@@ -283,7 +282,7 @@ export default function App() {
             <p className="section-desc">
               Open source friendly pieces — no proprietary browser, no mystery
               containers. Run the desktop binary locally or deploy the server
-              side to a VPS when you want shared VNC sessions.
+              side to a VPS when you want a shared capture endpoint.
             </p>
           </div>
           <div className="stack-row">

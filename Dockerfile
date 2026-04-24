@@ -1,10 +1,5 @@
 FROM node:20
 
-# VNC deps only - no pip. Playwright installs Chromium deps via --with-deps
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb x11vnc websockify \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY . .

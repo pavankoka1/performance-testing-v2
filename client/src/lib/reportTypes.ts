@@ -58,12 +58,24 @@ export type DownloadedAssetsSummary = {
     AssetCategory,
     { count: number; totalBytes: number; files: DownloadedAsset[] }
   >;
+  byScope?: {
+    all: { byCategory: DownloadedAssetsSummary["byCategory"]; totalBytes: number; totalCount: number };
+    game: { byCategory: DownloadedAssetsSummary["byCategory"]; totalBytes: number; totalCount: number };
+    common: { byCategory: DownloadedAssetsSummary["byCategory"]; totalBytes: number; totalCount: number };
+  };
   totalBytes: number;
   totalCount: number;
   /** Bytes for main doc + critical path resources before FCP (+ slack) */
   initialLoadBytes?: number;
   /** Same as totalBytes — everything transferred during the session */
   sessionTotalBytes?: number;
+  gameAssetKeys?: string[];
+  duplicates?: Array<{
+    url: string;
+    normalizedUrl: string;
+    count: number;
+    totalBytes: number;
+  }>;
 };
 
 export type TbtTimelineEntry = {
@@ -185,44 +197,4 @@ export type PerfReport = {
   blockingSummary?: BlockingSummary;
   /** Precomputed summary stats (avg CPU, avg FPS, etc.) */
   summaryStats?: SummaryStats;
-  developerHints?: {
-    reactRerenders?: {
-      totalEvents: number;
-      durationSec: number;
-      components: Array<{
-        name: string;
-        renderCount: number;
-        triggeredBy?: string;
-        inBursts: number;
-      }>;
-      topRerenderers: Array<{
-        name: string;
-        count: number;
-        triggeredBy?: string;
-        parentHierarchy?: string;
-        inBursts: number;
-      }>;
-      chartData?: Array<{
-        timeSec: number;
-        value: number;
-        components: Array<{ name: string; count: number; hierarchy?: string }>;
-      }>;
-      timeline?: Array<{
-        index: number;
-        timeSec: number;
-        componentName: string;
-        triggeredBy?: string;
-        parentHierarchy?: string;
-        inBurst: boolean;
-      }>;
-      bursts?: Array<{
-        startIndex: number;
-        endIndex: number;
-        count: number;
-        startTimeSec: number;
-        endTimeSec: number;
-        topComponents: Array<{ name: string; count: number }>;
-      }>;
-    };
-  };
 };

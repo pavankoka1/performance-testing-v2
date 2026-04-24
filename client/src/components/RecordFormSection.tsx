@@ -4,6 +4,7 @@ import type {
   RecordingStartOptions,
 } from "@/hooks/useRecording";
 import SelectField, { NICE_SELECT_CLASS } from "@/components/SelectField";
+import { defaultTraceDetail, isElectronRenderer } from "@/lib/perftraceEnv";
 import {
   Activity,
   Bot,
@@ -11,8 +12,6 @@ import {
   Gamepad2,
   Hash,
   KeyRound,
-  Layers,
-  Monitor,
   Network,
   User,
   Video,
@@ -27,9 +26,6 @@ import URLInput from "./URLInput";
 type CpuThrottle = 1 | 4 | 6 | 20;
 
 const DEFAULT_MANUAL_URL = "https://gpu-vs-cpu-animations.vercel.app/";
-/** Pragmatic games lobby auth (roulette / stake). */
-const AUTOMATION_URL_GAMES =
-  "https://games.pragmaticplaylive.net/authentication/authenticate.jsp";
 /** Certification lobby — Color Game Bonanza (matches Performance_Automation/casinoBettingFlow.js). */
 const AUTOMATION_URL_CERTIFICATION =
   "https://certification.pragmaticplaylive.net/authentication/authenticate.jsp";
@@ -37,19 +33,13 @@ const AUTOMATION_URL_CERTIFICATION =
 const ROUND_OPTIONS = [1, 3, 5, 10] as const;
 
 /** Defaults mirror server `casinoGames.js` (overridable per session in the form). */
-const GAME_DEFAULT_CREDS: Record<
-  AutomationGameId,
-  { user: string; pass: string }
-> = {
-  "russian-roulette": { user: "abdulg", pass: "abdulg123" },
-  "stake-roulette": { user: "abdulg", pass: "abdulg123" },
-  "color-game-bonanza": { user: "hareesh", pass: "hareesh123" },
-};
+const GAME_DEFAULT_CREDS: Record<AutomationGameId, { user: string; pass: string }> =
+  {
+    "color-game-bonanza": { user: "hareesh", pass: "hareesh123" },
+  };
 
 function automationDefaultUrlForGame(gameId: AutomationGameId) {
-  return gameId === "color-game-bonanza"
-    ? AUTOMATION_URL_CERTIFICATION
-    : AUTOMATION_URL_GAMES;
+  return AUTOMATION_URL_CERTIFICATION;
 }
 
 const isValidUrl = (value: string) => {
@@ -64,7 +54,6 @@ const isValidUrl = (value: string) => {
 type RecordFormSectionProps = {
   isRecording: boolean;
   isProcessing: boolean;
-  streamUrl: string | null;
   onStart: (
     url: string,
     cpuThrottle: CpuThrottle,
@@ -77,7 +66,6 @@ type RecordFormSectionProps = {
 function RecordFormSectionInner({
   isRecording,
   isProcessing,
-  streamUrl,
   onStart,
   onStop,
 }: RecordFormSectionProps) {
@@ -85,20 +73,26 @@ function RecordFormSectionInner({
   const [cpuThrottle, setCpuThrottle] = useState<CpuThrottle>(1);
   const [networkThrottle, setNetworkThrottle] =
     useState<NetworkThrottlePreset>("none");
-  const [recordVideo, setRecordVideo] = useState(true);
-  const [trackReactRerenders, setTrackReactRerenders] = useState(false);
+  const [recordVideo, setRecordVideo] = useState(() => !isElectronRenderer());
+  const [videoQuality, setVideoQuality] = useState<"low" | "high">("low");
+  const [assetGameKeysText, setAssetGameKeysText] = useState(
+    "colorgame,color-game"
+  );
+  const [traceDetail, setTraceDetail] = useState<"light" | "full">(
+    defaultTraceDetail()
+  );
   const [scriptMode, setScriptMode] = useState<"manual" | "automation">(
     "manual"
   );
   const [automationGame, setAutomationGame] =
-    useState<AutomationGameId>("russian-roulette");
+    useState<AutomationGameId>("color-game-bonanza");
   const [automationRounds, setAutomationRounds] =
     useState<(typeof ROUND_OPTIONS)[number]>(3);
   const [casinoUser, setCasinoUser] = useState(
-    () => GAME_DEFAULT_CREDS["russian-roulette"].user
+    () => GAME_DEFAULT_CREDS["color-game-bonanza"].user
   );
   const [casinoPass, setCasinoPass] = useState(
-    () => GAME_DEFAULT_CREDS["russian-roulette"].pass
+    () => GAME_DEFAULT_CREDS["color-game-bonanza"].pass
   );
   const [skipLobby, setSkipLobby] = useState(false);
 
@@ -110,7 +104,6 @@ function RecordFormSectionInner({
   useEffect(() => {
     if (scriptMode === "manual") {
       setUrl((u) =>
-        u === AUTOMATION_URL_GAMES ||
         u === AUTOMATION_URL_CERTIFICATION ||
         u.trim() === ""
           ? DEFAULT_MANUAL_URL
@@ -137,7 +130,12 @@ function RecordFormSectionInner({
     }
     const base: RecordingStartOptions = {
       recordVideo,
-      trackReactRerenders,
+      videoQuality,
+      traceDetail,
+      assetGameKeys: assetGameKeysText
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     };
     if (scriptMode === "automation") {
       onStart(url, cpuThrottle, networkThrottle, {
@@ -160,7 +158,9 @@ function RecordFormSectionInner({
     networkThrottle,
     onStart,
     recordVideo,
-    trackReactRerenders,
+    videoQuality,
+    assetGameKeysText,
+    traceDetail,
     scriptMode,
     automationGame,
     automationRounds,
@@ -267,8 +267,6 @@ function RecordFormSectionInner({
                 }
                 disabled={isRecording || isProcessing}
               >
-                <option value="russian-roulette">Russian Roulette</option>
-                <option value="stake-roulette">Stake Roulette</option>
                 <option value="color-game-bonanza">Color Game Bonanza</option>
               </SelectField>
               <SelectField
@@ -358,7 +356,7 @@ function RecordFormSectionInner({
             </div>
           </div>
         )}
-        <div className="grid gap-6 sm:grid-cols-2">
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <SelectField
             label="Network"
             icon={Network}
@@ -389,6 +387,39 @@ function RecordFormSectionInner({
             <option value={6}>6× — Heavier throttle</option>
             <option value={20}>20× — Stress test (very slow CPU)</option>
           </SelectField>
+          <SelectField
+            label="Trace"
+            icon={Activity}
+            hint="Trace detail (overhead)"
+            value={traceDetail}
+            onChange={(e) => setTraceDetail(e.target.value as "light" | "full")}
+            disabled={isRecording || isProcessing}
+          >
+            <option value="light">Light — smoother capture</option>
+            <option value="full">Full — deeper GPU/layout detail</option>
+          </SelectField>
+        </div>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)]/40 p-4">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-[var(--fg-muted)]">
+            Asset grouping (optional)
+          </p>
+          <label className="flex flex-col gap-2 text-sm text-[var(--fg)]">
+            <span className="text-[var(--fg-muted)]">
+              Game asset keys (comma-separated)
+            </span>
+            <input
+              type="text"
+              value={assetGameKeysText}
+              onChange={(e) => setAssetGameKeysText(e.target.value)}
+              disabled={isRecording || isProcessing}
+              className={`${NICE_SELECT_CLASS} font-mono text-[13px]`}
+              placeholder="colorgame,color-game"
+            />
+            <span className="text-xs text-[var(--fg-muted)]">
+              Any downloaded file URL containing one of these keys will be counted
+              as <span className="text-[var(--accent)]">game</span> assets.
+            </span>
+          </label>
         </div>
         <label
           className={`flex items-center gap-2 text-sm text-[var(--fg)] ${
@@ -410,26 +441,17 @@ function RecordFormSectionInner({
             (off for long runs)
           </span>
         </label>
-        <label
-          className={`flex items-center gap-2 text-sm text-[var(--fg)] ${
-            isRecording || isProcessing
-              ? "cursor-not-allowed opacity-60"
-              : "cursor-pointer"
-          }`}
+        <SelectField
+          label="Video"
+          icon={Video}
+          hint="Recording resolution"
+          value={videoQuality}
+          onChange={(e) => setVideoQuality(e.target.value as "low" | "high")}
+          disabled={isRecording || isProcessing || !recordVideo}
         >
-          <input
-            type="checkbox"
-            checked={trackReactRerenders}
-            onChange={(e) => setTrackReactRerenders(e.target.checked)}
-            disabled={isRecording || isProcessing}
-            className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
-          />
-          <Layers className="h-4 w-4 text-[var(--accent)]" />
-          <span>Track React re-renders</span>
-          <span className="text-xs text-[var(--fg-muted)]">
-            (react-render-tracker; stop may take longer)
-          </span>
-        </label>
+          <option value="low">Low (960×540) — lighter</option>
+          <option value="high">High (1366×768) — sharper</option>
+        </SelectField>
         <RecordButtons
           isRecording={isRecording}
           isProcessing={isProcessing}
@@ -441,17 +463,6 @@ function RecordFormSectionInner({
               : "Launch & Start Recording"
           }
         />
-        {streamUrl && (
-          <a
-            href={streamUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20"
-          >
-            <Monitor className="h-4 w-4" />
-            Open VNC stream to interact with browser
-          </a>
-        )}
         <div className="flex items-center gap-3 text-sm text-[var(--fg-muted)]">
           <span
             className={`h-2.5 w-2.5 rounded-full shadow-sm ${

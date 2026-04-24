@@ -37,6 +37,18 @@ type Props = {
 
 function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
   const [filter, setFilter] = useState<AssetCategory | "all">("all");
+  const [scope, setScope] = useState<"all" | "common" | "game">("all");
+
+  const scopedSummary = useMemo(() => {
+    if (!summary.byScope) return summary;
+    const s = summary.byScope[scope];
+    return {
+      ...summary,
+      byCategory: s.byCategory,
+      totalBytes: s.totalBytes,
+      totalCount: s.totalCount,
+    };
+  }, [summary, scope]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -57,7 +69,7 @@ function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
   const rows = useMemo(() => {
     const out: Array<DownloadedAsset & { category: AssetCategory }> = [];
     for (const cat of CATEGORY_ORDER) {
-      const bucket = summary.byCategory[cat];
+      const bucket = scopedSummary.byCategory[cat];
       if (!bucket?.files?.length) continue;
       for (const f of bucket.files) {
         out.push({ ...f, category: cat });
@@ -65,7 +77,7 @@ function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
     }
     if (filter === "all") return out;
     return out.filter((r) => r.category === filter);
-  }, [summary, filter]);
+  }, [scopedSummary, filter]);
 
   const modal = (
     <div
@@ -88,9 +100,17 @@ function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
               Downloaded assets
             </h2>
             <p className="text-xs text-[var(--fg-muted)]">
-              Session total {formatBytes(summary.totalBytes)} ·{" "}
-              {summary.totalCount} files
-              {summary.initialLoadBytes != null && (
+              Showing{" "}
+              <span className="text-[var(--fg)]">
+                {scope === "all"
+                  ? "all assets"
+                  : scope === "game"
+                    ? "game assets"
+                    : "common assets"}
+              </span>{" "}
+              · {formatBytes(scopedSummary.totalBytes)} · {scopedSummary.totalCount}{" "}
+              files
+              {summary.initialLoadBytes != null && scope === "all" && (
                 <> · Initial load ~{formatBytes(summary.initialLoadBytes)}</>
               )}
             </p>
@@ -104,7 +124,42 @@ function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex flex-wrap gap-2 border-b border-[var(--border)] px-5 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-5 py-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setScope("all")}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                scope === "all"
+                  ? "bg-[var(--accent)] text-[var(--bg)]"
+                  : "border border-[var(--border)] text-[var(--fg-muted)] hover:border-[var(--accent)]/40"
+              }`}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => setScope("common")}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                scope === "common"
+                  ? "bg-[var(--accent)] text-[var(--bg)]"
+                  : "border border-[var(--border)] text-[var(--fg-muted)] hover:border-[var(--accent)]/40"
+              }`}
+            >
+              Common
+            </button>
+            <button
+              type="button"
+              onClick={() => setScope("game")}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                scope === "game"
+                  ? "bg-[var(--accent)] text-[var(--bg)]"
+                  : "border border-[var(--border)] text-[var(--fg-muted)] hover:border-[var(--accent)]/40"
+              }`}
+            >
+              Game
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => setFilter("all")}
@@ -117,7 +172,7 @@ function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
             All
           </button>
           {CATEGORY_ORDER.map((cat) => {
-            const c = summary.byCategory[cat]?.count ?? 0;
+            const c = scopedSummary.byCategory[cat]?.count ?? 0;
             if (c === 0) return null;
             return (
               <button
@@ -135,6 +190,26 @@ function DownloadedAssetsModal({ summary, formatBytes, onClose }: Props) {
             );
           })}
         </div>
+        {(summary.duplicates?.length ?? 0) > 0 && scope === "all" && (
+          <div className="border-b border-[var(--border)] px-5 py-3">
+            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3">
+              <p className="text-sm font-medium text-rose-300">
+                Duplicate assets detected
+              </p>
+              <p className="mt-1 text-xs text-[var(--fg-muted)]">
+                Same URL downloaded multiple times (query stripped). Top items:
+              </p>
+              <ul className="mt-2 space-y-1 text-xs">
+                {(summary.duplicates ?? []).slice(0, 6).map((d) => (
+                  <li key={d.normalizedUrl} className="text-rose-200/90">
+                    {d.count}× · {formatBytes(d.totalBytes)} ·{" "}
+                    <span className="font-mono">{d.normalizedUrl}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
         <div className="scrollbar-themed min-h-0 flex-1 overflow-y-auto px-5 py-3">
           <table className="w-full text-left text-xs">
             <thead className="sticky top-0 bg-[var(--bg-card)] text-[var(--fg-muted)]">
