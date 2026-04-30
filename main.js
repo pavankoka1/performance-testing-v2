@@ -12,15 +12,50 @@ if (process.platform === "darwin" && process.env.PERFTRACE_FORCE_ANGLE_GL === "1
   app.commandLine.appendSwitch("use-angle", "gl");
 }
 
+const fs = require("fs");
 const path = require("path");
 const { CONTENT_SECURITY_POLICY } = require("./csp.js");
 
 // Must set before any Playwright code loads — bundled Chromium lives in Resources
 if (app.isPackaged && process.resourcesPath) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(
-    process.resourcesPath,
-    "playwright-browsers"
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.normalize(
+    path.join(process.resourcesPath, "playwright-browsers")
   );
+}
+
+/**
+ * Fail fast with a clear message if the packaged browser folder is missing or incomplete.
+ * End users do not run `npx playwright install`; a broken zip or AV-quarantined chrome.exe
+ * otherwise surfaces as the opaque Windows error "cannot access the specified device, path, or file."
+ */
+if (app.isPackaged && process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  try {
+    const { chromium } = require("playwright");
+    const exe = chromium.executablePath();
+    if (!exe || !fs.existsSync(exe)) {
+      const { dialog } = require("electron");
+      dialog.showErrorBox(
+        "PerfTrace — bundled Chromium not found",
+        [
+          "The packaged browser is missing or incomplete.",
+          "",
+          `Expected near:\n${process.env.PLAYWRIGHT_BROWSERS_PATH}`,
+          "",
+          "Try: reinstall from a fresh build; fully extract the .zip; right‑click the zip → Properties → Unblock before extracting; check antivirus did not quarantine files under playwright-browsers.",
+        ].join("\n")
+      );
+      app.quit();
+      process.exit(1);
+    }
+  } catch (e) {
+    const { dialog } = require("electron");
+    dialog.showErrorBox(
+      "PerfTrace — browser check failed",
+      e?.message || String(e)
+    );
+    app.quit();
+    process.exit(1);
+  }
 }
 
 const { startServer } = require("./server/index.js");
@@ -30,12 +65,23 @@ const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 let mainWindow = null;
 
+/** Windows shell/load expects .ico; SVG often triggers opaque OS‑level path/load failures. */
+function resolveWindowIconPath() {
+  const ico = path.join(__dirname, "assets", "app-icon.ico");
+  if (process.platform === "win32" && fs.existsSync(ico)) return ico;
+  const svg = path.join(__dirname, "client", "public", "favicon.svg");
+  if (fs.existsSync(svg)) return svg;
+  return undefined;
+}
+
 function createWindow() {
+  const iconPath = resolveWindowIconPath();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    fullscreenable: true,
     title: "PerfTrace — Performance Testing",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -44,7 +90,7 @@ function createWindow() {
       sandbox: false,
     },
     show: false,
-    icon: path.join(__dirname, "client/public/favicon.svg"),
+    ...(iconPath ? { icon: iconPath } : {}),
   });
 
   const url = `http://localhost:${PORT}`;
@@ -52,6 +98,7 @@ function createWindow() {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
+    mainWindow.maximize();
     if (isDev) {
       mainWindow.webContents.openDevTools();
     }
@@ -83,6 +130,13 @@ app.whenReady().then(async () => {
     createWindow();
   } catch (err) {
     console.error("Failed to start PerfTrace:", err);
+    try {
+      const { dialog } = require("electron");
+      dialog.showErrorBox(
+        "PerfTrace — startup failed",
+        err?.stack || err?.message || String(err)
+      );
+    } catch (_) {}
     app.quit();
   }
 });

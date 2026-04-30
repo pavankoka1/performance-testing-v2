@@ -226,16 +226,43 @@ export function inferBottleneckFromProperties(
   return undefined;
 }
 
+/**
+ * Minified or build-generated @keyframes names (e.g. `bo_br`) — prefer showing
+ * animated CSS properties in the UI instead.
+ */
+export function isOpaqueKeyframeName(name: string): boolean {
+  const n = name.trim();
+  if (!n || n === "(unnamed)") return true;
+  if (/^(cc-|blink-)/i.test(n)) return false;
+  if (/\s/.test(n)) return false;
+  if (/^[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(n)) return false;
+  if (
+    /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/.test(n) &&
+    n.length <= 64
+  )
+    return true;
+  if (/^[a-f0-9]{16,}$/i.test(n)) return true;
+  return false;
+}
+
 /** Prefer keyframe/transition name; otherwise derive from animated properties. */
 export function animationDisplayLabel(
   name: string | undefined,
   properties: string[] | undefined
 ): string {
-  const n = (name ?? "").trim();
-  if (n && n !== "(unnamed)") return humanizeAnimationName(n);
   const cleaned = filterAnimationPropertyKeys(properties ?? []);
-  if (cleaned.length) return cleaned.map((p) => titleCaseCssProp(p)).join(", ");
-  return "Animation";
+  const fromProps = cleaned.length
+    ? cleaned.map((p) => titleCaseCssProp(p)).join(", ")
+    : "";
+  const n = (name ?? "").trim();
+
+  if (cleaned.length > 0) {
+    if (!n || n === "(unnamed)" || isOpaqueKeyframeName(n)) {
+      return fromProps || "Animation";
+    }
+  }
+  if (n && n !== "(unnamed)") return humanizeAnimationName(n);
+  return fromProps || "Animation";
 }
 
 /** Human-readable property list: no `computedOffset`; fall back to name when CDP omits props. */

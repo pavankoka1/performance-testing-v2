@@ -5,8 +5,8 @@ import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 
 const require = createRequire(import.meta.url);
-const { CONTENT_SECURITY_POLICY } = require("../csp.js") as {
-  CONTENT_SECURITY_POLICY: string;
+const { META_CONTENT_SECURITY_POLICY } = require("../csp.js") as {
+  META_CONTENT_SECURITY_POLICY: string;
 };
 
 /** CSP meta only in production HTML so Vite dev HMR (needs eval) still works on :5173. */
@@ -19,7 +19,7 @@ function cspMetaPlugin(): Plugin {
         if (ctx.server) {
           return html;
         }
-        const meta = `<meta http-equiv="Content-Security-Policy" content="${CONTENT_SECURITY_POLICY}" />\n    `;
+        const meta = `<meta http-equiv="Content-Security-Policy" content="${META_CONTENT_SECURITY_POLICY}" />\n    `;
         return html.replace("<head>", `<head>\n    ${meta}`);
       },
     },

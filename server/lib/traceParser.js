@@ -41,7 +41,24 @@ const PAINT_EVENT_NAMES = new Set([
   "PaintImage",
   "PaintSetup",
   "PrePaint",
+  "FramePaint",
+  "PictureRaster",
 ]);
+
+/** Paint slices in Chrome traces vary by version; matches DevTools Performance “Painting”. */
+function isPaintTraceEvent(name, cat) {
+  if (PAINT_EVENT_NAMES.has(name)) return true;
+  const nm = (name || "").toLowerCase();
+  const c = (cat || "").toLowerCase();
+  if (nm === "framepaint" || nm.includes("paintartifact")) return true;
+  if (
+    (c.includes("devtools.timeline") || c.includes("blink")) &&
+    nm.includes("paint") &&
+    !nm.includes("layout")
+  )
+    return true;
+  return false;
+}
 
 /**
  * CLS per spec: session window algorithm.
@@ -201,6 +218,13 @@ function parseTraceToReport(
 ) {
   const tracePayload = traceText || "";
   const events = tracePayload ? parseTraceEvents(tracePayload) : [];
+  const { samples, fpsSamples, networkRequests } = fallback;
+  const forceSampleSeries = fallback?.forceSampleSeries === true;
+  /** Wall time when recording began (may differ from trace timeline anchor after game baseline). */
+  const sessionRecordingStartMs =
+    fallback?.sessionRecordingStartedAt != null
+      ? fallback.sessionRecordingStartedAt
+      : startedAt;
 
   let startTs = Number.POSITIVE_INFINITY;
   let endTs = Number.NEGATIVE_INFINITY;
@@ -215,12 +239,23 @@ function parseTraceToReport(
     endTs = 0;
   }
 
-  const wallClockDurationMs = Math.max(0, stoppedAt - startedAt);
+  let drawFrameMinTs = Number.POSITIVE_INFINITY;
+  for (const e of events) {
+    const nm = e.name ?? "";
+    if (FRAME_EVENT_NAMES.has(nm) && typeof e.ts === "number") {
+      drawFrameMinTs = Math.min(drawFrameMinTs, e.ts);
+    }
+  }
+  if (!Number.isFinite(drawFrameMinTs)) drawFrameMinTs = startTs;
+
+  const wallClockDurationMs = Math.max(0, stoppedAt - sessionRecordingStartMs);
   const wallClockDurationSec = wallClockDurationMs / 1000;
   const rawTraceSpan = endTs - startTs;
   const traceTsIsMicroseconds = rawTraceSpan > 1e6;
   const traceTsToSec = traceTsIsMicroseconds ? 1_000_000 : 1000;
 
+  /** Per wall-clock second, count DrawFrames per thread — take max(tid) so we never sum multiple compositor surfaces into “double FPS”. */
+  const drawFrameBySecTid = new Map();
   const fpsMap = new Map();
   const cpuBusyMap = new Map();
   const gpuBusyMap = new Map();
@@ -240,6 +275,13 @@ function parseTraceToReport(
   const tsToSec = (ts) =>
     Math.max(0, Math.min(wallClockDurationSec, (ts - startTs) / traceTsToSec));
 
+  /** DrawFrame buckets only — global `startTs` can be minutes before first paint, which shifted FPS ~20–30s late. */
+  const tsToSecDrawFrame = (ts) =>
+    Math.max(
+      0,
+      Math.min(wallClockDurationSec, (ts - drawFrameMinTs) / traceTsToSec)
+    );
+
   const addToBucket = (bucket, ts, value) => {
     const second = Math.floor(tsToSec(ts));
     bucket.set(second, (bucket.get(second) ?? 0) + value);
@@ -252,7 +294,14 @@ function parseTraceToReport(
     const dur = event.dur ?? 0;
 
     if (FRAME_EVENT_NAMES.has(name)) {
-      addToBucket(fpsMap, ts, 1);
+      const sec = Math.floor(tsToSecDrawFrame(ts));
+      const tid = event.tid ?? 0;
+      let tidMap = drawFrameBySecTid.get(sec);
+      if (!tidMap) {
+        tidMap = new Map();
+        drawFrameBySecTid.set(sec, tidMap);
+      }
+      tidMap.set(tid, (tidMap.get(tid) ?? 0) + 1);
       if (typeof ts === "number") drawFrameTs.push(ts);
     }
     if (event.ph === "X" && dur > 0) {
@@ -275,7 +324,12 @@ function parseTraceToReport(
       layoutTimeMs += dur / 1000;
       layoutMs += dur / 1000;
     }
-    if (event.ph === "X" && dur > 0 && PAINT_EVENT_NAMES.has(name)) {
+    if (
+      event.ph === "X" &&
+      dur > 0 &&
+      isPaintTraceEvent(name, cat) &&
+      !LAYOUT_EVENT_NAMES.has(name)
+    ) {
       paintCount++;
       paintTimeMs += dur / 1000;
     }
@@ -305,6 +359,21 @@ function parseTraceToReport(
       if (typeof nodes === "number")
         domPoints.push({ timeSec: tsToSec(ts), value: nodes });
     }
+  }
+
+  for (const [sec, tidMap] of drawFrameBySecTid) {
+    let best = 0;
+    for (const c of tidMap.values()) {
+      if (c > best) best = c;
+    }
+    if (best > 0) fpsMap.set(sec, best);
+  }
+
+  if (forceSampleSeries) {
+    longTasks.length = 0;
+    drawFrameTs.length = 0;
+    memoryPoints.length = 0;
+    domPoints.length = 0;
   }
 
   // Attribute long tasks: find dominant child event (what caused the delay)
@@ -340,32 +409,52 @@ function parseTraceToReport(
     return { label, unit, points };
   };
 
-  const { samples, fpsSamples, networkRequests } = fallback;
   const totalScript = scriptMs || samples.reduce((s, x) => s + x.scriptMs, 0);
   const totalLayout = layoutMs || samples.reduce((s, x) => s + x.layoutMs, 0);
 
   const traceFpsPoints = mapToSeries(fpsMap, "FPS", "fps").points;
-  const useTraceFps =
-    fpsMap.size > 2 &&
-    traceFpsPoints.length >= 2 &&
-    Math.max(...traceFpsPoints.map((p) => p.value)) <= 200;
-  const fpsSeries = useTraceFps
-    ? {
-        label: "FPS",
-        unit: "fps",
-        points: traceFpsPoints.map((p) => ({
-          ...p,
-          value: Math.min(120, Math.max(0, p.value)),
-        })),
-      }
-    : {
-        label: "FPS",
-        unit: "fps",
-        points: fpsSamples.map((p) => ({
-          ...p,
-          value: Math.min(120, Math.max(0, p.value)),
-        })),
-      };
+
+  const clampFpsSec = (t) =>
+    Math.max(0, Math.min(wallClockDurationSec, t));
+
+  /**
+   * Per-second merge of trace DrawFrame buckets and in-page rAF samples. In-page values win
+   * on the same second. Trace backfills when the buffer missed startup, or the page was
+   * throttled; client backfills when trace paint categories were light.
+   *
+   * When `forceSampleSeries` (game baseline / trimmed charts), in-page FPS is already rebased
+   * to t=0 at baseline; trace DrawFrame seconds still use the global trace timeline, so mixing
+   * them stretches the FPS series past the aligned CPU/heap window. Use client FPS only there.
+   */
+  const useTraceFpsInMerge = !(
+    forceSampleSeries && Array.isArray(fpsSamples) && fpsSamples.length > 0
+  );
+  const tracePts = useTraceFpsInMerge
+    ? traceFpsPoints.map((p) => ({
+        timeSec: clampFpsSec(p.timeSec),
+        value: Math.min(240, Math.max(0, p.value)),
+      }))
+    : [];
+  const clientPts = (fpsSamples || []).map((p) => ({
+    timeSec: clampFpsSec(p.timeSec ?? 0),
+    value: Math.min(240, Math.max(0, p.value ?? 0)),
+  }));
+  const fpsBySec = new Map();
+  for (const p of tracePts) {
+    const sec = Math.floor(p.timeSec + 1e-9);
+    if (!fpsBySec.has(sec)) fpsBySec.set(sec, p);
+  }
+  for (const p of clientPts) {
+    const sec = Math.floor(p.timeSec + 1e-9);
+    fpsBySec.set(sec, p);
+  }
+  const fpsSeries = {
+    label: "FPS",
+    unit: "fps",
+    points: [...fpsBySec.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, pt]) => pt),
+  };
 
   // CPU: convert to percentage (0-100). Trace buckets are per-second; CDP samples now 1s interval.
   const SAMPLE_WINDOW_MS = 1000;
@@ -373,7 +462,8 @@ function parseTraceToReport(
     Math.min(100, Math.max(0, (ms / SAMPLE_WINDOW_MS) * 100));
 
   const cpuPoints = mapToSeries(cpuBusyMap, "CPU", "%").points;
-  const useTraceCpu = cpuBusyMap.size > 2 && cpuPoints.length >= 2;
+  const useTraceCpu =
+    !forceSampleSeries && cpuBusyMap.size > 2 && cpuPoints.length >= 2;
   const cpuSeries = useTraceCpu
     ? {
         label: "CPU",
@@ -389,35 +479,15 @@ function parseTraceToReport(
         })),
       };
 
-  // GPU: ms per second -> percentage (0-100). Value is total ms in that second.
-  const toGpuPercent = (ms) => Math.min(100, Math.max(0, (ms / 1000) * 100));
-  let gpuPoints = mapToSeries(gpuBusyMap, "GPU", "%").points;
-  let gpuFromFallback = false;
-  if (gpuPoints.length === 0 && wallClockDurationSec > 0) {
-    const totalGpuMs = rasterMs + compositeMs;
-    const avgGpuPct = Math.min(
-      100,
-      totalGpuMs > 0 ? (totalGpuMs / wallClockDurationMs) * 100 : 0
-    );
-    const steps = Math.max(2, Math.floor(wallClockDurationSec));
-    const step = wallClockDurationSec / steps;
-    gpuPoints = [];
-    for (let i = 0; i <= steps; i++) {
-      gpuPoints.push({ timeSec: i * step, value: avgGpuPct });
-    }
-    gpuFromFallback = true;
-  }
+  /** GPU utilisation is not computed reliably from our trace — omit chart (empty series). */
   const gpuSeries = {
     label: "GPU",
     unit: "%",
-    points: gpuPoints.map((p) => ({
-      ...p,
-      value: gpuFromFallback ? p.value : toGpuPercent(p.value),
-    })),
+    points: [],
   };
 
   const memorySeries =
-    memoryPoints.length > 0
+    !forceSampleSeries && memoryPoints.length > 0
       ? { label: "JS Heap", unit: "MB", points: memoryPoints }
       : {
           label: "JS Heap",
@@ -428,7 +498,7 @@ function parseTraceToReport(
         };
 
   const domSeries =
-    domPoints.length > 0
+    !forceSampleSeries && domPoints.length > 0
       ? { label: "DOM Nodes", unit: "count", points: domPoints }
       : {
           label: "DOM Nodes",
@@ -562,7 +632,7 @@ function parseTraceToReport(
           }));
 
   return {
-    startedAt: new Date(startedAt).toISOString(),
+    startedAt: new Date(sessionRecordingStartMs).toISOString(),
     stoppedAt: new Date(stoppedAt).toISOString(),
     durationMs: wallClockDurationMs,
     fpsSeries,
@@ -597,9 +667,15 @@ function parseTraceToReport(
       animationFrameEventsPerSec: {
         label: "Animation frames",
         unit: "count",
-        points: fpsSamples,
+        points: fpsSeries.points,
       },
       totalAnimations: 0,
+      bottleneckCounts: {
+        compositor: 0,
+        paint: 0,
+        layout: 0,
+        unclassified: 0,
+      },
     },
     webVitals: {
       fcpMs: fallback.clientCollector?.fcp,
@@ -612,7 +688,7 @@ function parseTraceToReport(
     spikeFrames: [],
     video: null,
     suggestions,
-    gpuEstimated: gpuFromFallback,
+    gpuEstimated: false,
   };
 }
 

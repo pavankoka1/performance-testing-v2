@@ -2,7 +2,7 @@
 
 import type { MetricPoint, PerfReport } from "@/lib/reportTypes";
 import { getClosestFrameAtTime, getVitalsAtTime } from "@/lib/reportUtils";
-import { Play, Square, X } from "lucide-react";
+import { Activity, Play, Sparkles, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -23,6 +23,8 @@ type GraphModalProps = {
   unit: string;
   data: MetricPoint[];
   report: PerfReport;
+  /** Overrides report.durationMs for X-axis when metric uses baseline-aligned window */
+  maxDurationSec?: number;
   onClose: () => void;
 };
 
@@ -34,9 +36,14 @@ export default function GraphModal({
   unit,
   data,
   report,
+  maxDurationSec: maxDurationSecProp,
   onClose,
 }: GraphModalProps) {
-  const durationSec = report.durationMs / 1000;
+  const durationSec =
+    maxDurationSecProp ??
+    (report.alignedDurationMs != null && report.alignedDurationMs > 0
+      ? report.alignedDurationMs / 1000
+      : report.durationMs / 1000);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [playing, setPlaying] = useState(false);
   const playRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -58,10 +65,12 @@ export default function GraphModal({
     };
   }, [playing, durationSec]);
 
-  const chartData = data.map((p) => ({
-    timeSec: p.timeSec,
-    value: formatValue(p.value),
-  }));
+  const chartData = [...data]
+    .sort((a, b) => a.timeSec - b.timeSec)
+    .map((p) => ({
+      timeSec: p.timeSec,
+      value: formatValue(p.value),
+    }));
 
   const handleChartClick = useCallback(
     (state: unknown) => {
@@ -78,7 +87,8 @@ export default function GraphModal({
 
   const vitals = getVitalsAtTime(report, currentTimeSec);
   const closestFrame = getClosestFrameAtTime(report, currentTimeSec);
-  const isEmpty = !chartData.length || chartData.every((d) => d.value === 0);
+  const isEmpty = !chartData.length;
+  const isAnimationStyleMetric = /animation/i.test(title);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -104,18 +114,58 @@ export default function GraphModal({
         aria-label="Close"
       />
       <div
-        className="relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl shadow-black/50"
+        className={`relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border bg-[var(--bg-card)] shadow-2xl shadow-black/50 ${
+          isAnimationStyleMetric
+            ? "border-fuchsia-500/40 shadow-fuchsia-950/30"
+            : "border-[var(--border)]"
+        }`}
         role="dialog"
         aria-modal="true"
         aria-label={`Graph: ${title}`}
       >
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-          <h3 className="text-lg font-semibold text-[var(--fg)]">{title}</h3>
-          <div className="flex items-center gap-2">
+        <div
+          className={`flex items-center justify-between gap-3 px-4 py-3.5 ${
+            isAnimationStyleMetric
+              ? "border-b border-fuchsia-500/25 bg-gradient-to-r from-violet-700/90 via-fuchsia-700/85 to-violet-900/90"
+              : "border-b border-[var(--border)] bg-[var(--bg-elevated)]/40"
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-2.5">
+            {isAnimationStyleMetric ? (
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/15 text-white shadow-inner ring-1 ring-white/20">
+                <Sparkles className="h-4 w-4" aria-hidden />
+              </span>
+            ) : (
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)]/15 text-[var(--accent)] ring-1 ring-[var(--accent)]/25">
+                <Activity className="h-4 w-4" aria-hidden />
+              </span>
+            )}
+            <div className="min-w-0">
+              <h3
+                className={`truncate text-lg font-semibold tracking-tight ${
+                  isAnimationStyleMetric ? "text-white" : "text-[var(--fg)]"
+                }`}
+              >
+                {title}
+              </h3>
+              <p
+                className={`text-[11px] font-medium uppercase tracking-wider ${
+                  isAnimationStyleMetric ? "text-violet-100/90" : "text-[var(--fg-muted)]"
+                }`}
+              >
+                {unit} · scrub timeline below
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={() => setPlaying((p) => !p)}
-              className="cursor-pointer rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+              className={`cursor-pointer rounded-lg p-2 transition ${
+                isAnimationStyleMetric
+                  ? "text-white/90 hover:bg-white/15 hover:text-white"
+                  : "text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+              }`}
               aria-label={playing ? "Pause" : "Play"}
             >
               {playing ? (
@@ -127,7 +177,11 @@ export default function GraphModal({
             <button
               type="button"
               onClick={onClose}
-              className="cursor-pointer rounded-lg p-2 text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+              className={`cursor-pointer rounded-lg p-2 transition ${
+                isAnimationStyleMetric
+                  ? "text-white/90 hover:bg-white/15 hover:text-white"
+                  : "text-[var(--fg-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+              }`}
               aria-label="Close"
             >
               <X className="h-5 w-5" />
@@ -185,20 +239,20 @@ export default function GraphModal({
                   />
                   <ReferenceLine
                     x={currentTimeSec}
-                    stroke="var(--accent)"
+                    stroke={isAnimationStyleMetric ? "#f0abfc" : "var(--accent)"}
                     strokeWidth={2}
                   />
                   <Area
                     type="monotone"
                     dataKey="value"
-                    fill="var(--accent)"
-                    fillOpacity={0.2}
+                    fill={isAnimationStyleMetric ? "#a855f7" : "var(--accent)"}
+                    fillOpacity={isAnimationStyleMetric ? 0.28 : 0.2}
                     stroke="none"
                   />
                   <Line
                     type="monotone"
                     dataKey="value"
-                    stroke="var(--accent)"
+                    stroke={isAnimationStyleMetric ? "#e879f9" : "var(--accent)"}
                     strokeWidth={2}
                     dot={false}
                   />
@@ -211,59 +265,85 @@ export default function GraphModal({
           </p>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-3">
-              <h4 className="mb-2 text-xs font-semibold uppercase text-[var(--fg-muted)]">
-                Vitals at {currentTimeSec.toFixed(1)}s
+            <div
+              className={`rounded-xl border p-4 shadow-inner ${
+                isAnimationStyleMetric
+                  ? "border-violet-500/35 bg-gradient-to-br from-violet-950/50 via-[var(--bg-elevated)]/95 to-fuchsia-950/40"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)]/80"
+              }`}
+            >
+              <h4 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--fg-muted)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]" />
+                Live vitals @ {currentTimeSec.toFixed(1)}s
               </h4>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <span className="text-[var(--fg-muted)]">FPS</span>
-                <span className="font-mono text-[var(--fg)]">
-                  {vitals.fps != null ? vitals.fps : "—"}
-                </span>
-                <span className="text-[var(--fg-muted)]">CPU</span>
-                <span className="font-mono text-[var(--fg)]">
-                  {vitals.cpuPercent != null ? `${vitals.cpuPercent}%` : "—"}
-                </span>
-                <span className="text-[var(--fg-muted)]">GPU</span>
-                <span className="font-mono text-[var(--fg)]">
-                  {vitals.gpuBusyMs != null ? `${vitals.gpuBusyMs}%` : "—"}
-                </span>
-                <span className="text-[var(--fg-muted)]">Heap (MB)</span>
-                <span className="font-mono text-[var(--fg)]">
-                  {vitals.jsHeapMb != null ? vitals.jsHeapMb : "—"}
-                </span>
-                <span className="text-[var(--fg-muted)]">DOM nodes</span>
-                <span className="font-mono text-[var(--fg)]">
-                  {vitals.domNodes != null ? vitals.domNodes : "—"}
-                </span>
-              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 text-xs">
+                {(
+                  [
+                    ["FPS", vitals.fps != null ? String(vitals.fps) : "—"],
+                    [
+                      "CPU",
+                      vitals.cpuPercent != null ? `${vitals.cpuPercent}%` : "—",
+                    ],
+                    [
+                      "GPU",
+                      vitals.gpuBusyMs != null ? `${vitals.gpuBusyMs}%` : "—",
+                    ],
+                    ["Heap MB", vitals.jsHeapMb != null ? String(vitals.jsHeapMb) : "—"],
+                    [
+                      "DOM",
+                      vitals.domNodes != null ? String(vitals.domNodes) : "—",
+                    ],
+                  ] as const
+                ).map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="text-[var(--fg-muted)]">{k}</dt>
+                    <dd className="font-mono text-sm font-semibold tabular-nums text-[var(--fg)]">
+                      {v}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
             </div>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-3">
-              <h4 className="mb-2 text-xs font-semibold uppercase text-[var(--fg-muted)]">
-                Closest frame
+            <div
+              className={`rounded-xl border p-4 ${
+                isAnimationStyleMetric
+                  ? "border-fuchsia-500/35 bg-gradient-to-br from-fuchsia-950/35 via-[var(--bg-elevated)]/90 to-violet-950/50"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)]/80"
+              }`}
+            >
+              <h4 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--fg-muted)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.65)]" />
+                Closest video frame
               </h4>
               {closestFrame ? (
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <img
                     src={closestFrame.imageDataUrl}
                     alt={`Frame at ${closestFrame.timeSec.toFixed(1)}s`}
-                    className="h-20 w-28 rounded border border-[var(--border)] object-cover"
+                    className={`h-24 w-32 shrink-0 rounded-lg object-cover shadow-lg ${
+                      isAnimationStyleMetric
+                        ? "ring-2 ring-fuchsia-500/40"
+                        : "border border-[var(--border)]"
+                    }`}
                   />
-                  <div className="text-xs text-[var(--fg-muted)]">
-                    <p className="font-medium text-[var(--fg)]">
-                      {closestFrame.timeSec.toFixed(1)}s
+                  <div className="flex min-w-0 flex-col justify-center text-xs">
+                    <p className="font-mono text-base font-bold tabular-nums text-[var(--fg)]">
+                      t = {closestFrame.timeSec.toFixed(2)}s
                     </p>
-                    <p>
-                      {closestFrame.fps != null
-                        ? Math.round(closestFrame.fps)
-                        : "—"}{" "}
-                      FPS
+                    <p className="mt-1 text-[var(--fg-muted)]">
+                      Stream FPS:{" "}
+                      <span className="font-semibold text-[var(--accent)]">
+                        {closestFrame.fps != null
+                          ? Math.round(closestFrame.fps)
+                          : "—"}
+                      </span>
                     </p>
                   </div>
                 </div>
               ) : (
-                <p className="text-xs text-[var(--fg-muted)]">
-                  No captured frame near this time.
+                <p className="text-sm leading-relaxed text-[var(--fg-muted)]">
+                  No captured frame near this time — video may be off or samples
+                  sparse.
                 </p>
               )}
             </div>

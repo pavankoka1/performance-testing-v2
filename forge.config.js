@@ -17,7 +17,10 @@ module.exports = {
   packagerConfig: {
     name: "PerfTrace",
     executableName: "PerfTrace",
-    asar: true,
+    /** Basename only: resolves app-icon.icns / .ico / .png next to this path */
+    icon: path.join(__dirname, "assets", "app-icon"),
+    /** Unpack static UI so Express sendFile/static paths resolve reliably on Windows (asar quirks). */
+    asar: { unpack: "**/client/dist/**" },
     ...(hasAppleSigning
       ? {
           osxSign: {},
@@ -286,6 +289,46 @@ module.exports = {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin", "win32", "linux"],
     },
+    {
+      name: "@electron-forge/maker-squirrel",
+      platforms: ["win32"],
+      config: {
+        name: "perftrace",
+        title: "PerfTrace",
+        authors: "PerfTrace",
+        setupIcon: path.join(__dirname, "assets", "app-icon.ico"),
+        /**
+         * Forge's Squirrel maker defaults noMsi internally; set false so electron-winstaller
+         * also emits Setup.msi (alongside Setup.exe) when built on Windows.
+         */
+        noMsi: false,
+      },
+    },
+    {
+      name: "@electron-forge/maker-wix",
+      platforms: ["win32"],
+      config: {
+        manufacturer: "PerfTrace",
+        /** Must match packagerConfig.executableName + .exe */
+        exe: "PerfTrace.exe",
+      },
+    },
     { name: "@electron-forge/maker-dmg", config: {} },
+    {
+      name: "@electron-forge/maker-deb",
+      platforms: ["linux"],
+      config: {
+        options: {
+          /** Debian package basename (lowercase); .deb file is `<name>_<version>_amd64.deb`. */
+          name: "perftrace",
+          /** Must match packagerConfig.executableName / linux binary in out/… */
+          bin: "PerfTrace",
+          maintainer: "PerfTrace <perftrace@localhost>",
+          homepage: "https://github.com/",
+          categories: ["Development", "Utility"],
+          section: "devel",
+        },
+      },
+    },
   ],
 };

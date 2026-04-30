@@ -13,8 +13,12 @@ import {
   Network,
   Paintbrush,
   Radio,
-  Zap,
 } from "lucide-react";
+import {
+  describeMaxThresholds,
+  describeMinThresholds,
+  METRIC_THRESHOLDS,
+} from "./metricThresholds";
 
 export type MetricDefinition = {
   id: string;
@@ -39,17 +43,16 @@ export const metricsGlossary: MetricDefinition[] = [
     id: "fps",
     name: "FPS (Frames per second)",
     icon: Gauge,
-    what: "Number of frames the browser paints per second.",
+    what: "Smooth-motion throughput — frames delivered per second on your timeline.",
     howToUnderstand:
-      "60 FPS = smooth. Below 45 FPS users notice jank. p50/p95/p99 distributions show sustained performance; drops during animations or bet updates indicate bottlenecks.",
-    targetValue:
-      "Target 60 FPS. p95 ≥ 55, p99 ≥ 45 acceptable. Gaming/betting UIs should sustain 60 during video + odds updates.",
+      "60 FPS feels fluid on a 60 Hz display; 120 Hz panels can show higher rAF rates. Sustained dips below ~45 FPS feel janky. Compare spikes with long tasks and layout/paint bars.",
+    targetValue: `Good: ${describeMinThresholds(METRIC_THRESHOLDS.fps, " FPS").goodText}. Warning: ${describeMinThresholds(METRIC_THRESHOLDS.fps, " FPS").warnText}. Poor: ${describeMinThresholds(METRIC_THRESHOLDS.fps, " FPS").badText}.`,
     behindTheHood:
-      "Measured via requestAnimationFrame callbacks. Each callback ≈ 1 frame. Gaps >16.67ms (60 FPS) mean missed frames. CDP tracing also records DrawFrame events.",
+      "PerfTrace merges in-page sampling (requestAnimationFrame buckets over wall-clock seconds, aligned to session start) with Chrome trace DrawFrame counts per compositor thread — trace fills gaps when startup seconds were dropped from the buffer or tabs switched; in-page wins on the same second. Full-session time axis; separate from game-baseline trim used for some other series.",
     whyOptimize:
-      "Low FPS causes visible stutter in video, odds animations, and bet boards. Users perceive sluggishness and may mistrust real-time data.",
+      "Low or uneven FPS means stutter in video, animations, and live UI. Users notice delay and may lose trust in real-time data.",
     mitigate:
-      "Reduce main-thread work, use requestAnimationFrame for animations, avoid layout thrashing, defer non-critical JS.",
+      "Cut main-thread work, keep animations on compositor-friendly properties (transform, opacity), avoid forced layout, split long tasks, reduce paint area.",
   },
   {
     id: "cpu",
@@ -58,8 +61,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "Time the main thread spent doing work.",
     howToUnderstand:
       "High CPU % blocks input handling and animations. Spikes during odds updates or bet submissions indicate heavy JS. Sustained high CPU suggests inefficient loops or excessive re-renders.",
-    targetValue:
-      "Keep main-thread busy time < 50% during active interaction. Spikes < 200ms acceptable; sustained > 80% is problematic.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.cpu, "%").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.cpu, "%").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.cpu, "%").badText}.`,
     behindTheHood:
       "Derived from CDP Performance.getMetrics or trace events (RunTask, EvaluateScript). Main thread = single-threaded JS execution; blocking it delays everything.",
     whyOptimize:
@@ -68,30 +70,13 @@ export const metricsGlossary: MetricDefinition[] = [
       "Split long tasks, defer non-critical JS, use Web Workers for heavy computation.",
   },
   {
-    id: "gpu",
-    name: "GPU busy time",
-    icon: Zap,
-    what: "Time the GPU spent on compositing and rasterization.",
-    howToUnderstand:
-      "GPU handles layer compositing, rasterization, and some animations. High GPU with low FPS suggests GPU bottleneck (e.g. too many layers, complex effects).",
-    targetValue:
-      "GPU should not be saturated. If estimated from raster+composite, correlate with FPS; high GPU + low FPS = optimize layers.",
-    behindTheHood:
-      "Often estimated from CDP raster/composite events when native GPU metrics unavailable. Real GPU metrics require Chrome flags or DevTools.",
-    whyOptimize:
-      "GPU overload causes frame drops in video and animations. Excessive layers (e.g. many odds cells with shadows) can throttle compositing.",
-    mitigate:
-      "Reduce layer count, use will-change sparingly, simplify box-shadows and filters.",
-  },
-  {
     id: "js-heap",
     name: "JS Heap",
     icon: MemoryStick,
     what: "JavaScript heap memory used by the page.",
     howToUnderstand:
       "Heap grows as objects are allocated. Steady growth across rounds = leak. Spikes during interactions are normal; failure to drop = retained references.",
-    targetValue:
-      "Stable or slight variance. Delta > +2MB per round without GC drop = potential leak. Gaming UIs: watch for growth over 5–10 rounds.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.heapMb, " MB", true).goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.heapMb, " MB", true).warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.heapMb, " MB", true).badText}.`,
     behindTheHood:
       "performance.memory.usedJSHeapSize (Chrome) or CDP Runtime.getHeapUsage. Sampled periodically; GC can cause dips. Detached DOM shows in heap snapshots.",
     whyOptimize:
@@ -106,8 +91,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "Number of DOM elements in the document.",
     howToUnderstand:
       "Large trees slow layout, style, and hit-testing. Growth without corresponding UI = detached or duplicated nodes. Odds boards with many cells can bloat quickly.",
-    targetValue:
-      "Keep minimal. < 1500 nodes for simple UIs; < 3000 for complex dashboards. Delta per round should be small; +50+ nodes/round = investigate.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.domNodes, "").goodText} nodes. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.domNodes, "").warnText} nodes. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.domNodes, "").badText} nodes.`,
     behindTheHood:
       "document.querySelectorAll('*').length. Each node incurs style, layout, and paint cost. Virtualization reduces visible nodes; detached nodes still count in heap.",
     whyOptimize:
@@ -119,13 +103,13 @@ export const metricsGlossary: MetricDefinition[] = [
     id: "layout",
     name: "Layout / Reflow",
     icon: Layout,
-    what: "Browser recalculating element geometry (positions, sizes).",
+    what: "In the report bar chart, the Layout bar is the sum of layout-phase durations from the Chrome trace over the whole recording (events such as Layout, UpdateLayoutTree). It answers “how much layout work happened during capture”, similar to DevTools Performance—not one frame.",
     howToUnderstand:
       "Layout is triggered by style changes, DOM mutations, or resize. Forced synchronous layouts (read-then-write) cause thrashing. High layout count = inefficient updates.",
     targetValue:
       "Minimize layout count. Layout time < 10% of script time. Thrashing = many layouts in quick succession.",
     behindTheHood:
-      "CDP trace events: Layout, UpdateLayoutTree. Browser computes computed style → layout tree → geometry. Forced sync layout = style read triggers immediate recalc.",
+      "Parsed from Chrome tracing (devtools.timeline): Layout, UpdateLayoutTree, InterleavedLayout, etc. The companion Paint bar sums Paint / FramePaint / related painting slices—aligned with the Painting row in DevTools when categories match.",
     whyOptimize:
       "Layout thrashing blocks the main thread. Odds updates that trigger full-board reflows cause jank during live games.",
     mitigate:
@@ -135,13 +119,12 @@ export const metricsGlossary: MetricDefinition[] = [
     id: "paint",
     name: "Paint",
     icon: Paintbrush,
-    what: "Time spent painting pixels to layers.",
+    what: "In the report bar chart, the Paint bar sums raster/painting trace durations (Paint, PaintImpl, FramePaint, and devtools.timeline paint slices) across the session—session-wide total time in painting, like Chrome DevTools aggregates.",
     howToUnderstand:
       "Paint area = repainted regions. Full repaints of large areas (e.g. entire odds board) are expensive. Small, targeted paint regions = efficient.",
-    targetValue:
-      "Paint time < 5ms per frame ideal. Paint count should correlate with visual changes; excessive paints = over-invalidation.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.paintMs, " ms").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.paintMs, " ms").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.paintMs, " ms").badText}.`,
     behindTheHood:
-      "CDP Paint events. Browser rasterizes layers to pixels. Paint area from trace; large areas = more work. Compositing can skip paint for transform/opacity-only changes.",
+      "When default trace paint events are sparse, the parser also counts blink/devtools timeline events whose names include “paint” (excluding pure layout). Raster/composite work appears separately under Render breakdown.",
     whyOptimize:
       "Heavy paint blocks compositing. Video + animated odds + bet highlights = competing for paint budget.",
     mitigate:
@@ -170,7 +153,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "When the first text or image is painted.",
     howToUnderstand:
       "First meaningful paint. Users see something. FCP < 1.8s = good. Delayed FCP = render-blocking resources or slow server.",
-    targetValue: "Good: < 1.8s. Needs improvement: 1.8–3s. Poor: > 3s.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.fcpMs, " ms").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.fcpMs, " ms").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.fcpMs, " ms").badText}.`,
     behindTheHood:
       "PerformanceObserver for 'paint' with name 'first-contentful-paint'. Browser fires when first pixel of text/image is drawn.",
     whyOptimize:
@@ -185,7 +168,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "When the largest visible content element is painted.",
     howToUnderstand:
       "LCP = main content. Usually hero image, video, or large text block. LCP < 2.5s = good.",
-    targetValue: "Good: < 2.5s. Needs improvement: 2.5–4s. Poor: > 4s.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.lcpMs, " ms").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.lcpMs, " ms").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.lcpMs, " ms").badText}.`,
     behindTheHood:
       "PerformanceObserver for 'largest-contentful-paint'. Tracks largest image, video, or text block. Can change as page loads.",
     whyOptimize:
@@ -200,7 +183,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "Stability of layout. Measures unexpected layout shifts.",
     howToUnderstand:
       "CLS score = sum of impact × distance for unexpected shifts. 0 = perfect. < 0.1 = good. Shifts = content jumping (e.g. ads, odds loading).",
-    targetValue: "Good: < 0.1. Needs improvement: 0.1–0.25. Poor: > 0.25.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.cls, "").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.cls, "").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.cls, "").badText}.`,
     behindTheHood:
       "PerformanceObserver for 'layout-shift'. Layout shift = visible content moved without user input. Impact = size of shift × distance.",
     whyOptimize:
@@ -215,7 +198,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "Total time the main thread was blocked (tasks over ~50ms).",
     howToUnderstand:
       "TBT = sum of (task duration - 50ms) for long tasks. Measures input responsiveness. TBT < 200ms = good.",
-    targetValue: "Good: < 200ms. Needs improvement: 200–600ms. Poor: > 600ms.",
+    targetValue: `Good: ${describeMaxThresholds(METRIC_THRESHOLDS.tbtMs, " ms").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.tbtMs, " ms").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.tbtMs, " ms").badText}.`,
     behindTheHood:
       "Derived from long tasks. TBT = Σ max(0, taskDuration - 50). Correlates with INP (Interaction to Next Paint).",
     whyOptimize:
@@ -230,7 +213,10 @@ export const metricsGlossary: MetricDefinition[] = [
     howToUnderstand:
       "FCP = first paint. LCP = main content. TBT = input blocking. CLS = layout stability. Together they measure perceived performance and responsiveness.",
     targetValue:
-      "FCP < 1.8s, LCP < 2.5s, TBT < 200ms, CLS < 0.1. Long task count should be low.",
+      `FCP ${describeMaxThresholds(METRIC_THRESHOLDS.fcpMs, " ms").goodText}, ` +
+      `LCP ${describeMaxThresholds(METRIC_THRESHOLDS.lcpMs, " ms").goodText}, ` +
+      `TBT ${describeMaxThresholds(METRIC_THRESHOLDS.tbtMs, " ms").goodText}, ` +
+      `CLS ${describeMaxThresholds(METRIC_THRESHOLDS.cls, "").goodText}.`,
     behindTheHood:
       "PerformanceObserver APIs for paint and layout-shift. Long tasks from trace. LCP can change as page loads.",
     whyOptimize:
@@ -245,8 +231,7 @@ export const metricsGlossary: MetricDefinition[] = [
     what: "Number of requests, total bytes, and average latency.",
     howToUnderstand:
       "Request count = API calls, assets. Latency = server round-trip. High tail latency (p95/p99) for bet POSTs = slow confirmations.",
-    targetValue:
-      "Minimize requests. API p95 < 500ms for bet submission. p99 < 1s for critical paths.",
+    targetValue: `Latency good: ${describeMaxThresholds(METRIC_THRESHOLDS.latencyMs, " ms").goodText}. Warning: ${describeMaxThresholds(METRIC_THRESHOLDS.latencyMs, " ms").warnText}. Poor: ${describeMaxThresholds(METRIC_THRESHOLDS.latencyMs, " ms").badText}.`,
     behindTheHood:
       "CDP Network domain or Performance.getEntriesByType('resource'). Request timing: DNS, connect, TTFB, download.",
     whyOptimize:

@@ -10,8 +10,6 @@ export function isElectronRenderer(): boolean {
 }
 
 export function defaultTraceDetail(): TraceDetail {
-  // Packaged Electron builds are more resource-constrained (Electron UI + Playwright Chromium).
-  // Default to "light" to keep interactions smooth on weaker laptops.
-  return isElectronRenderer() ? "light" : "full";
+  return "full";
 }
 

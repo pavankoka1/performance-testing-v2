@@ -7,6 +7,11 @@ type SessionVideoPlayerProps = {
   src: string;
   /** Session trace duration — playback cannot exceed this (may be shorter than file). */
   maxDurationSec: number;
+  /**
+   * Skip this many seconds from the file start so playback aligns with chart t=0
+   * (preload before URL baseline / game surface).
+   */
+  timelineOffsetSec?: number;
   /** Fires on timeupdate (throttled by the browser / Plyr). */
   onTimeSecChange?: (sec: number) => void;
   className?: string;
@@ -15,18 +20,21 @@ type SessionVideoPlayerProps = {
 function SessionVideoPlayerInner({
   src,
   maxDurationSec,
+  timelineOffsetSec = 0,
   onTimeSecChange,
   className = "",
 }: SessionVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onTimeRef = useRef(onTimeSecChange);
   onTimeRef.current = onTimeSecChange;
+  const offset = Math.max(0, timelineOffsetSec);
 
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
 
     const player = new Plyr(el, {
+      iconUrl: "/plyr.svg",
       controls: [
         "play-large",
         "restart",
@@ -53,13 +61,18 @@ function SessionVideoPlayerInner({
     });
     const effectiveCap = () => {
       const raw = player.duration;
-      const fileDur = Number.isFinite(raw) && raw > 0 ? raw : maxDurationSec;
-      return Math.min(fileDur, maxDurationSec);
+      const fileDur = Number.isFinite(raw) && raw > 0 ? raw : maxDurationSec + offset;
+      const graphEndOnFile = offset + maxDurationSec;
+      return Math.min(fileDur, graphEndOnFile);
     };
 
     const clampAndNotify = () => {
       const cap = effectiveCap();
       let t = player.currentTime;
+      if (t < offset) {
+        t = offset;
+        player.currentTime = offset;
+      }
       if (t > cap) {
         t = cap;
         player.currentTime = cap;
@@ -67,11 +80,12 @@ function SessionVideoPlayerInner({
       if (t >= cap - 0.05) {
         player.pause();
       }
-      onTimeRef.current?.(t);
+      onTimeRef.current?.(Math.max(0, t - offset));
     };
 
     const onSeeked = () => {
       const cap = effectiveCap();
+      if (player.currentTime < offset) player.currentTime = offset;
       if (player.currentTime > cap) {
         player.currentTime = cap;
       }
@@ -79,6 +93,7 @@ function SessionVideoPlayerInner({
 
     const onLoadedMeta = () => {
       const cap = effectiveCap();
+      if (player.currentTime < offset) player.currentTime = offset;
       if (player.currentTime > cap) player.currentTime = cap;
     };
 
@@ -92,7 +107,7 @@ function SessionVideoPlayerInner({
       player.off("loadedmetadata", onLoadedMeta);
       player.destroy();
     };
-  }, [src, maxDurationSec]);
+  }, [src, maxDurationSec, offset]);
 
   return (
     <div className={`session-video-shell ${className}`.trim()}>

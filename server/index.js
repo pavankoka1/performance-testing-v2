@@ -9,6 +9,7 @@ const {
   getLatestVideo,
   getSessionSnapshot,
 } = require("./lib/capture");
+const { listAutomationGames } = require("./lib/casinoGames");
 const { getSystemStatus } = require("./lib/systemStatus");
 const { CONTENT_SECURITY_POLICY } = require("../csp.js");
 
@@ -23,8 +24,31 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.json());
 
+/**
+ * Packaged app: Vite build may live in `app.asar.unpacked/client/dist` (see forge asar unpack).
+ * Prefer that path on disk so Windows does not hit odd asar read/sendFile issues.
+ */
+function resolveClientDist() {
+  const fromServer = path.join(__dirname, "../client/dist");
+  try {
+    const { app: electronApp } = require("electron");
+    if (electronApp?.isPackaged && process.resourcesPath) {
+      const unpacked = path.join(
+        process.resourcesPath,
+        "app.asar.unpacked",
+        "client",
+        "dist"
+      );
+      if (fs.existsSync(path.join(unpacked, "index.html"))) return unpacked;
+    }
+  } catch {
+    /* not running under Electron (e.g. node server/index.js) */
+  }
+  return fromServer;
+}
+
 // Serve built client (production) - only if dist exists
-const clientDist = path.join(__dirname, "../client/dist");
+const clientDist = resolveClientDist();
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
 }
@@ -41,6 +65,12 @@ app.post("/api/start", async (req, res) => {
       traceDetail = "full",
       assetGameKeys = [],
       automation,
+      layoutMode,
+      viewportWidth,
+      viewportHeight,
+      assetBaselineUrlContains,
+      assetBaselineUrlRegex,
+      assetBaselineUrlRegexFlags,
     } = req.body || {};
     if (!url || typeof url !== "string") {
       return res
@@ -76,6 +106,38 @@ app.post("/api/start", async (req, res) => {
             skipLobby: automation.skipLobby === true,
           }
         : null;
+    const browserLayout =
+      typeof layoutMode === "string" ||
+      viewportWidth != null ||
+      viewportHeight != null
+        ? {
+            layoutMode:
+              typeof layoutMode === "string" ? layoutMode : undefined,
+            viewportWidth:
+              viewportWidth !== undefined && viewportWidth !== null
+                ? Number(viewportWidth)
+                : undefined,
+            viewportHeight:
+              viewportHeight !== undefined && viewportHeight !== null
+                ? Number(viewportHeight)
+                : undefined,
+          }
+        : null;
+
+    const assetBaseline =
+      typeof assetBaselineUrlRegex === "string" && assetBaselineUrlRegex.trim()
+        ? {
+            assetBaselineUrlRegex: assetBaselineUrlRegex.trim(),
+            assetBaselineUrlRegexFlags:
+              typeof assetBaselineUrlRegexFlags === "string"
+                ? assetBaselineUrlRegexFlags
+                : "i",
+          }
+        : typeof assetBaselineUrlContains === "string" &&
+            assetBaselineUrlContains.trim()
+          ? { assetBaselineUrlContains: assetBaselineUrlContains.trim() }
+          : null;
+
     const result = await createCaptureSession(
       url,
       cpuThrottle,
@@ -84,7 +146,9 @@ app.post("/api/start", async (req, res) => {
       videoQuality,
       traceDetail,
       assetGameKeys,
-      automationOpts
+      automationOpts,
+      browserLayout,
+      assetBaseline
     );
     return res.json(result);
   } catch (error) {
@@ -125,6 +189,18 @@ app.get("/api/session", (req, res) => {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to get session state.";
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/automation/games", (req, res) => {
+  try {
+    return res.json({ games: listAutomationGames() });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to get automation game configuration.";
     return res.status(500).json({ error: message });
   }
 });
@@ -176,8 +252,9 @@ app.get("/api/video/download", async (req, res) => {
 
 // SPA fallback (production only)
 app.get("*", (req, res, next) => {
-  if (fs.existsSync(path.join(clientDist, "index.html"))) {
-    res.sendFile(path.join(clientDist, "index.html"));
+  const indexHtml = path.resolve(clientDist, "index.html");
+  if (fs.existsSync(indexHtml)) {
+    res.sendFile(indexHtml);
   } else {
     res.status(404).json({
       error:

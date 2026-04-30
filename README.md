@@ -40,6 +40,16 @@ npm run dev
 
 On macOS, VNC streaming is not available (Xvfb is Linux-only). The app runs in headless mode—metrics are captured but you cannot interact with the browser. For full VNC support, use a Linux VPS or Docker.
 
+### Standalone Playwright E2E (certification Color Game)
+
+Optional smoke tests live under `e2e/`. Run:
+
+```bash
+npm run test:e2e
+```
+
+If **Windows** shows “cannot access the specified device, path, or file” when Chromium starts during **`npm run test:e2e`** (dev CLI), allow `%LOCALAPPDATA%\ms-playwright` in Defender / Controlled folder access and run `npx playwright install chromium --force`. See comments in `playwright.config.js`. For the **packaged PerfTrace `.exe`**, browsers ship inside the app — see **Desktop App → Sharing → Windows** above (end users do not run `npx playwright install`).
+
 ### Production (headless only)
 
 ```bash
@@ -54,6 +64,7 @@ PORT=3000 npm start
 | POST   | /api/start   | Start recording (body: `{ url, cpuThrottle?, networkThrottle?, recordVideo?, videoQuality?, traceDetail? }`; `recordVideo` defaults to `true`) |
 | POST   | /api/stop    | Stop recording, return report                                                                                         |
 | GET    | /api/metrics | Live metrics during recording                                                                                         |
+| GET    | /api/automation/games | Automation game registry for the UI                                                                         |
 | GET    | /api/video   | Session video (WebM)                                                                                                  |
 | GET    | /api/video/download | Download session video (WebM)                                                                                  |
 
@@ -145,11 +156,24 @@ All builds work from macOS without Mono, Wine, or Linux packaging tools.
 
 **Architecture note** — Universal macOS builds include Chromium for your Mac's architecture. Built on Apple Silicon → works on M1/M2/M3/M4. Built on Intel → works on Intel Macs. For best compatibility, build on the target architecture or use `npm run electron:make` (single-arch) instead of universal.
 
+**Windows: “Cannot access the specified device, path, or file” (distributed `.exe`)** — This is **not** fixed by asking users to run `npx playwright install`; the installer already ships Chromium next to the app (`resources/playwright-browsers`). On **other** PCs the usual causes are:
+
+- **Antivirus / Defender** blocking or quarantining `chrome.exe` inside `playwright-browsers` (corporate laptops are common).
+- **Incomplete extraction** of the `.zip`, or the zip was **blocked** by Windows (download Properties → **Unblock**, then extract again).
+- **Smart App Control** or policy blocking unsigned/untrusted binaries.
+
+Mitigations you can give recipients: unblock + full re-extract; allowlist the install folder or `PerfTrace.exe`; IT may need to allow the bundled Chromium path. Long-term, **Authenticode-signing** the Windows build reduces SmartScreen/Defender friction (same story as any Electron app shipping its own browser).
+
 ### Requirements
 
 - **Chromium**: Bundled automatically during packaging. No user install needed.
 - **macOS**: Headed mode works; VNC is Linux-only.
 - **Windows**: Headed mode works; no VNC.
+
+## Configuration Docs
+
+- Automation game registry: [docs/AUTOMATION-GAMES.md](docs/AUTOMATION-GAMES.md)
+- Metric thresholds: [docs/METRIC-THRESHOLDS.md](docs/METRIC-THRESHOLDS.md)
 
 ## Docker
 

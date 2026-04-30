@@ -1,5 +1,6 @@
 {
   "name": "performance-testing-v2",
+  "productName": "PerfTrace",
   "version": "0.1.0",
   "private": true,
   "description": "Self-hosted performance testing with Playwright + CDP tracing and optional video download",
@@ -14,14 +15,19 @@
     "electron:package": "npm run build && electron-forge package",
     "electron:make": "npm run build && rm -rf out && electron-forge make",
     "electron:make:mac": "npm run build && rm -rf out && electron-forge make --platform darwin --arch universal",
-    "electron:make:win": "npm run build && electron-forge make --platform win32 --arch x64",
+    "electron:make:win": "npm run build && rm -rf out && npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-zip",
+    "electron:make:win-installer": "npm run build && rm -rf out && npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-squirrel",
+    "electron:make:win-msi": "npm run build && npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-wix",
+    "electron:make:win-msi:incremental": "npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-wix --skip-package",
     "electron:make:linux": "npm run build && electron-forge make --platform linux --arch x64",
-    "electron:make:all": "npm run build && rm -rf out && electron-forge make -p darwin -a universal && electron-forge make -p win32 -a x64 && electron-forge make -p linux -a x64",
+    "electron:make:linux-deb": "npm run build && rm -rf out && npx electron-forge make --platform linux --arch x64 --targets @electron-forge/maker-deb",
+    "electron:make:all": "npm run build && rm -rf out && npx electron-forge make -p darwin -a universal && npx electron-forge make -p win32 -a x64 --targets @electron-forge/maker-zip && npx electron-forge make -p linux -a x64 --targets @electron-forge/maker-deb",
     "deploy:website": "cd website && node prepare-vercel-output.cjs && npx vercel deploy --prebuilt --prod",
     "deploy:website:perftrace": "cd website && node deploy-performance-testing-website.cjs",
     "deploy:website:prebuilt": "cd website && node prepare-vercel-output.cjs && npx vercel deploy --prebuilt --prod",
     "deploy:website:netlify": "cd website && npx netlify deploy --prod --dir=.",
-    "postinstall": "node scripts/postinstall.cjs"
+    "postinstall": "node scripts/postinstall.cjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@sparticuz/chromium": "^143.0.4",
@@ -33,10 +39,15 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.6.0",
+    "@electron-forge/maker-deb": "^7.6.0",
     "@electron-forge/maker-dmg": "^7.6.0",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-wix": "^7.11.1",
     "@electron-forge/maker-zip": "^7.6.0",
+    "@playwright/test": "^1.58.1",
     "concurrently": "^9.0.1",
-    "electron": "^33.2.0"
+    "electron": "^33.2.0",
+    "png-to-ico": "^3.0.1"
   },
   "engines": {
     "node": ">=18"

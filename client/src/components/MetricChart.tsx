@@ -26,6 +26,8 @@ type MetricChartProps = {
   /** Metric ID for help modal; if set, shows help icon */
   metricId?: string;
   onOpenHelp?: (metricId: string) => void;
+  /** When true, tooltip / X-axis treat the horizontal position as time in seconds (show "s") */
+  xAxisIsTimeSec?: boolean;
 };
 
 const formatValue = (value: number) =>
@@ -43,21 +45,25 @@ export default function MetricChart({
   subtitle,
   metricId,
   onOpenHelp,
+  xAxisIsTimeSec = true,
 }: MetricChartProps) {
-  const chartData = data.map((point, i) => ({
-    id: i,
-    time: labelFormatter
-      ? labelFormatter(point)
-      : `${Math.round(point.timeSec)}s`,
-    timeSec: point.timeSec,
-    value: formatValue(point.value),
-  }));
+  const chartData = [...data]
+    .sort((a, b) => a.timeSec - b.timeSec)
+    .map((point, i) => ({
+      id: i,
+      time: labelFormatter
+        ? labelFormatter(point)
+        : xAxisIsTimeSec
+          ? `${Math.round(point.timeSec)}s`
+          : String(Math.round(point.timeSec)),
+      timeSec: point.timeSec,
+      value: formatValue(point.value),
+    }));
 
-  // Bar charts (e.g. layout vs paint totals) should still render at 0 ms; line charts
-  // with no points are empty; lines with only zeros still show a flat series.
-  const isEmpty =
-    !chartData.length ||
-    (type !== "bar" && chartData.every((d) => d.value === 0));
+  // Bar charts (e.g. layout vs paint totals) should still render at 0 ms. Line charts with
+  // all-zero values are still valid data (e.g. CPU idle, throttled FPS) — only empty when
+  // there are no points.
+  const isEmpty = !chartData.length;
 
   return (
     <div className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/80 p-4 transition-all duration-200 hover:border-[var(--accent)]/25 hover:shadow-[0_0_20px_rgba(139,92,246,0.08)]">
@@ -114,9 +120,21 @@ export default function MetricChart({
                 <XAxis dataKey="time" stroke="var(--fg-muted)" />
                 <YAxis stroke="var(--fg-muted)" />
                 <Tooltip
-                  contentStyle={{
-                    background: "var(--bg-elevated)",
-                    border: "1px solid var(--border)",
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const row = payload[0]
+                      .payload as (typeof chartData)[0];
+                    return (
+                      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-xs shadow-lg">
+                        <p className="font-medium text-[var(--fg)]">{title}</p>
+                        <p className="mt-1 text-[var(--fg-muted)]">
+                          {row.time}
+                        </p>
+                        <p className="mt-1 font-mono text-[var(--fg)]">
+                          {row.value} {unit}
+                        </p>
+                      </div>
+                    );
                   }}
                 />
                 <Bar
@@ -137,7 +155,8 @@ export default function MetricChart({
                   domain={durationSec != null ? [0, durationSec] : undefined}
                   tickFormatter={
                     durationSec != null
-                      ? (t: number) => `${Math.round(t)}s`
+                      ? (t: number) =>
+                          xAxisIsTimeSec ? `${Math.round(t)}s` : String(t)
                       : undefined
                   }
                   stroke="var(--fg-muted)"
@@ -150,9 +169,29 @@ export default function MetricChart({
                   }
                 />
                 <Tooltip
-                  contentStyle={{
-                    background: "var(--bg-elevated)",
-                    border: "1px solid var(--border)",
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const row = payload[0]
+                      .payload as (typeof chartData)[0];
+                    const timeLabel =
+                      durationSec != null && xAxisIsTimeSec
+                        ? `${Number(row.timeSec).toFixed(2)}s`
+                        : row.time;
+                    return (
+                      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-xs shadow-lg">
+                        <p className="text-[10px] uppercase tracking-wide text-[var(--fg-muted)]">
+                          Time (session)
+                        </p>
+                        <p className="font-mono text-[var(--fg)]">{timeLabel}</p>
+                        <p className="mt-2 text-[10px] uppercase tracking-wide text-[var(--fg-muted)]">
+                          {title}
+                        </p>
+                        <p className="font-mono text-[var(--fg)]">
+                          {row.value}
+                          {unit ? ` ${unit}` : ""}
+                        </p>
+                      </div>
+                    );
                   }}
                 />
                 <Line

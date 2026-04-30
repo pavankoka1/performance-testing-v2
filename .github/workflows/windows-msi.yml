@@ -1,0 +1,33 @@
+# MSI requires WiX Toolset + Windows; cannot build .msi on macOS/Linux.
+name: Build Windows MSI (WiX)
+on:
+  workflow_dispatch:
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install WiX Toolset v3
+        run: choco install wixtoolset --version=3.14.1 -y
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build MSI
+        run: npm run electron:make:win-msi
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PerfTrace-MSI
+          path: out/make/wix/**/*.msi
+          if-no-files-found: error

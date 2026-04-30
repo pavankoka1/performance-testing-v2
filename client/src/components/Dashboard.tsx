@@ -46,7 +46,10 @@ export default function Dashboard() {
               </h1>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <label className="flex cursor-pointer items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--fg-muted)] transition hover:border-[var(--accent)]/30">
+              <label
+                title="Fullscreen WebGL2 shader behind the UI (GPU). Uses extra GPU when idle; automatically paused while recording/processing so traces stay representative."
+                className="flex cursor-help items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--fg-muted)] transition hover:border-[var(--accent)]/30"
+              >
                 <input
                   type="checkbox"
                   checked={webglBgEnabled}

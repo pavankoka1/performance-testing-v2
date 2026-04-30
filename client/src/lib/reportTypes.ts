@@ -33,6 +33,8 @@ export type NetworkRequest = {
   type?: string;
   transferSize?: number;
   durationMs?: number;
+  startTimeMs?: number;
+  endTimeMs?: number;
 };
 
 /** Asset category: build = main HTML doc, json = API responses (xhr/fetch), rest = static assets */
@@ -51,6 +53,9 @@ export type DownloadedAsset = {
   category: AssetCategory;
   transferSize?: number;
   durationMs?: number;
+  endTimeMs?: number;
+  /** Resource Timing `responseEnd` (ms since navigation); comparable to `curtainLiftMs` from `performance.now()` */
+  lifecycleAtMs?: number;
 };
 
 export type DownloadedAssetsSummary = {
@@ -67,6 +72,25 @@ export type DownloadedAssetsSummary = {
   totalCount: number;
   /** Bytes for main doc + critical path resources before FCP (+ slack) */
   initialLoadBytes?: number;
+  curtainLiftMs?: number;
+  lifecycleTotals?: {
+    preload: { totalBytes: number; totalCount: number };
+    postload: { totalBytes: number; totalCount: number };
+    full: { totalBytes: number; totalCount: number };
+  };
+  /** Same rollup as lifecycleTotals, split by URL scope (game keys vs common) */
+  lifecycleTotalsByScope?: {
+    game: {
+      preload: { totalBytes: number; totalCount: number };
+      postload: { totalBytes: number; totalCount: number };
+      full: { totalBytes: number; totalCount: number };
+    };
+    common: {
+      preload: { totalBytes: number; totalCount: number };
+      postload: { totalBytes: number; totalCount: number };
+      full: { totalBytes: number; totalCount: number };
+    };
+  };
   /** Same as totalBytes — everything transferred during the session */
   sessionTotalBytes?: number;
   gameAssetKeys?: string[];
@@ -76,6 +100,11 @@ export type DownloadedAssetsSummary = {
     count: number;
     totalBytes: number;
   }>;
+  /** Derived from duplicates: how many URLs repeat; extra redundant fetches vs once each */
+  duplicateStats?: {
+    uniqueUrls: number;
+    extraFetches: number;
+  };
 };
 
 export type TbtTimelineEntry = {
@@ -107,15 +136,49 @@ export type BlockingSummary = {
 export type SummaryStats = {
   avgFps: number;
   avgCpu: number;
-  avgGpu: number;
+  /** Omitted when GPU chart is disabled */
+  avgGpu?: number;
   peakMemMb: number;
   peakDomNodes: number;
+};
+
+/** Snapshot of Chromium / capture options used for this session (for interpreting metrics). */
+export type CaptureSettings = {
+  cpuThrottle: number;
+  networkThrottle: "none" | "slow-3g" | "fast-3g" | "4g";
+  networkProfile: {
+    latencyMs: number;
+    downloadBps: number | null;
+    uploadBps: number | null;
+  };
+  traceDetail: "light" | "full";
+  recordVideo: boolean;
+  videoQuality: "low" | "high";
+  browserLayout:
+    | { mode: "landscape" }
+    | { mode: "portrait"; width: number; height: number };
+  automation?: {
+    enabled: boolean;
+    gameId?: string;
+    rounds?: number;
+    skipLobby?: boolean;
+  };
 };
 
 export type PerfReport = {
   startedAt: string;
   stoppedAt: string;
   durationMs: number;
+  /**
+   * When a game baseline exists, rebased series (CPU, heap, DOM, etc.) span this wall-clock
+   * window only. FPS uses full-session `durationMs` on the time axis; use this for chart
+   * domains of rebased metrics so the line fills the plot (no fake gap after the game window).
+   */
+  alignedDurationMs?: number;
+  /** Single-browser-session correlation id — one Chromium context per report */
+  captureSessionId?: string | null;
+  /** CPU / network / trace / layout options applied during recording */
+  captureSettings?: CaptureSettings;
   /** URL that was recorded (when available) */
   recordedUrl?: string | null;
   fpsSeries: MetricSeries;
@@ -167,9 +230,17 @@ export type PerfReport = {
       delayMs?: number;
       properties?: string[];
       bottleneckHint?: "compositor" | "paint" | "layout";
+      /** Best-effort selector or tag hint when available from the capture pipeline */
+      targetHint?: string;
     }>;
     animationFrameEventsPerSec: MetricSeries;
     totalAnimations: number;
+    bottleneckCounts?: {
+      compositor: number;
+      paint: number;
+      layout: number;
+      unclassified: number;
+    };
   };
   webVitals: {
     fcpMs?: number;
@@ -189,7 +260,12 @@ export type PerfReport = {
     imageDataUrl: string;
     fps?: number;
   }>;
-  video: { url: string; format: string } | null;
+  video: {
+    url: string;
+    format: string;
+    /** Seconds to skip in the WebM so t=0 matches chart time (URL baseline / game open). */
+    timelineOffsetSec?: number;
+  } | null;
   suggestions: BottleneckSuggestion[];
   /** Downloaded files by category (JS, CSS, HTML, JSON, images, fonts) */
   downloadedAssets?: DownloadedAssetsSummary;

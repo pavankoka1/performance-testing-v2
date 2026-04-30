@@ -6,7 +6,6 @@ import { memo, useState } from "react";
 const glossaryMetricIds = [
   "fps",
   "cpu",
-  "gpu",
   "js-heap",
   "dom-nodes",
   "layout",
@@ -48,7 +47,8 @@ function MetricsGlossary({ onOpenHelp }: MetricsGlossaryProps) {
       {open && (
         <div className="border-t border-[var(--border)] px-6 py-4">
           <p className="mb-4 text-xs text-[var(--fg-muted)]">
-            What we measure and how to improve each metric.
+            What we measure, how the app collects it (trace + in-page, full-session
+            timeline for FPS), and practical ways to improve each signal.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {metrics.map((m) => {

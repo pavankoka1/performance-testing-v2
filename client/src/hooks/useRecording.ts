@@ -12,8 +12,7 @@ export type NetworkThrottlePreset =
   | "fast-3g"
   | "4g";
 
-export type AutomationGameId =
-  | "color-game-bonanza";
+export type AutomationGameId = string;
 
 export type AutomationStartPayload = {
   enabled: true;
@@ -36,6 +35,21 @@ export type RecordingStartOptions = {
   traceDetail?: TraceDetail;
   /** Pragmatic Live: login → lobby → game → N rounds; server stops trace when done. */
   automation?: AutomationStartPayload;
+  /** Landscape = maximized Chromium; portrait = fixed viewport + window size. */
+  layoutMode?: "landscape" | "portrait";
+  /** Portrait inner viewport width (content pixels). */
+  viewportWidth?: number;
+  /** Portrait inner viewport height (content pixels). */
+  viewportHeight?: number;
+  /**
+   * Manual SPA: start preload/network baseline when the visible tab URL contains this string.
+   * Ignored if `assetBaselineUrlRegex` is set.
+   */
+  assetBaselineUrlContains?: string;
+  /** Manual SPA: baseline when the URL matches this pattern (wins over contains). */
+  assetBaselineUrlRegex?: string;
+  /** Regex flags for `assetBaselineUrlRegex` (default `i`). */
+  assetBaselineUrlRegexFlags?: string;
 };
 
 const readJsonResponse = async (response: Response) => {
@@ -125,6 +139,25 @@ export function useRecording() {
             traceDetail: options?.traceDetail ?? "full",
             assetGameKeys: options?.assetGameKeys ?? [],
             automation: automationBody,
+            layoutMode: options?.layoutMode ?? "landscape",
+            viewportWidth: options?.viewportWidth,
+            viewportHeight: options?.viewportHeight,
+            ...(typeof options?.assetBaselineUrlRegex === "string" &&
+            options.assetBaselineUrlRegex.trim()
+              ? {
+                  assetBaselineUrlRegex: options.assetBaselineUrlRegex.trim(),
+                  assetBaselineUrlRegexFlags:
+                    typeof options.assetBaselineUrlRegexFlags === "string"
+                      ? options.assetBaselineUrlRegexFlags
+                      : "i",
+                }
+              : typeof options?.assetBaselineUrlContains === "string" &&
+                  options.assetBaselineUrlContains.trim()
+                ? {
+                    assetBaselineUrlContains:
+                      options.assetBaselineUrlContains.trim(),
+                  }
+                : {}),
           }),
         });
         const data = await readJsonResponse(response);

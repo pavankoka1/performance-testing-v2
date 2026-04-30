@@ -4,22 +4,23 @@ import { EyeWidget } from "./components/EyeWidget";
 import { ShaderCanvas } from "./components/ShaderCanvas";
 
 const METRICS = [
-  "FPS (live + series)",
-  "CPU pressure",
-  "GPU / compositor",
+  "FPS (in-page + trace, merged per second)",
+  "CPU (live + trace)",
+  "Frame pacing & stagger risk",
+  "Main-thread blocked / TBT timeline",
   "JS heap",
   "DOM node count",
-  "Layout & paint",
-  "Long tasks",
-  "Blocking threads",
+  "Layout & paint (trace totals)",
+  "Render breakdown (script · layout · raster)",
+  "Long tasks & attribution",
   "FCP · LCP · CLS · TBT",
-  "Network waterfall",
-  "Downloaded assets",
-  "Bundle / script size",
-  "Stylesheet weight",
-  "Animation timeline",
-  "Session video (WebM)",
-  "CDP trace export",
+  "Network waterfall & latency",
+  "Downloaded assets & bytes",
+  "Animation timeline (CDP + keyframes)",
+  "Session video (WebM, baseline-aligned)",
+  "HTML report export (session capture settings)",
+  "Session id & optional automation context",
+  "CDP trace (full / light)",
 ];
 
 const BENTO = [
@@ -33,7 +34,7 @@ const BENTO = [
     span: "span-3",
     icon: "📡",
     title: "Live dashboard while you record",
-    body: "Watch FPS, CPU, and heap update while you record. Stop the session and you get a dense report plus an optional downloadable session video (WebM) for playback and sharing.",
+    body: "Watch FPS, CPU, and heap update in real time. On stop, the server merges Chrome trace DrawFrame data with in-page rAF samples so the FPS series covers the full wall clock (including early seconds) when either source has them. Optional WebM and a polished HTML export with session capture settings ship with the report.",
   },
   {
     span: "span-2",
@@ -57,7 +58,7 @@ const BENTO = [
     span: "span-6",
     icon: "📑",
     title: "One report after you hit stop",
-    body: "A single view stitches trace-derived data, Web Vitals, live metric series, optional animation timeline, and downloaded-bytes summaries — export-friendly for sharing with your team.",
+    body: "Dense report: merged FPS, CPU, heap, layout vs paint, render breakdown, TBT chart, network, assets, frame pacing, spike frames, and glossaries. Download a standalone HTML file with session capture settings (CPU / network / trace / video / layout) and every metric block — not just the in-app view — for audits and handoffs.",
   },
 ];
 
@@ -76,7 +77,7 @@ const PIPELINE = [
   },
   {
     title: "Stop → report",
-    desc: "The server parses the Chrome trace, merges client metrics, and returns a structured report: charts, tables, and narrative sections you can skim in minutes.",
+    desc: "The server parses the CDP trace, merges in-page collectors, and builds FPS from both DrawFrame and rAF (per-second merge, full session on the time axis). You get charts, Web Vitals, TBT, assets, and an optional HTML download with capture metadata.",
   },
 ];
 
@@ -163,10 +164,11 @@ export default function App() {
             </h1>
             <p className="hero-sub">
               PerfTrace is a desktop performance studio: launch any URL in real
-              Chromium, throttle the CPU, record CDP traces, stream optional
-              video, and walk away with a dense report — FPS, Web Vitals, assets,
-              long tasks, and more — without sending your product traffic to a
-              SaaS black box.
+              Chromium, throttle CPU and network, record CDP traces, stream
+              optional video, and walk away with a dense report — merged FPS
+              (trace + in-page), Web Vitals, assets, long tasks, frame pacing,
+              downloadable HTML with session capture settings — without sending
+              your product traffic to a SaaS black box.
             </p>
             <div className="hero-actions">
               <a className="btn btn-primary" href="#download">
@@ -188,9 +190,10 @@ export default function App() {
             <p className="section-kicker">Signal density</p>
             <h2 className="section-title">What the app actually measures</h2>
             <p className="section-desc">
-              Everything below shows up across the live session and/or the
-              post-run report — pulled from Chrome DevTools Protocol, trace
-              events, Performance APIs, and network timing where applicable.
+              Live view + post-run report: CDP, Chrome trace (including
+              DrawFrame for FPS), in-page collectors, and network timing. FPS
+              combines trace and in-page per wall-clock second for a full-session
+              chart when either source has data.
             </p>
           </div>
           <motion.div

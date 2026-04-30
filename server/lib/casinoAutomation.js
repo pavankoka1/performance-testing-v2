@@ -9,9 +9,10 @@ const { getAutomationGame } = require("./casinoGames");
 /** Mirrors Performance_Automation/casinoBettingFlow.js TIMING for lobby search + game load. */
 const TIMING = {
   loginFormMaxWaitMs: 25000,
-  loginPollMs: 50,
-  /** First wait for lobby after login — same as casinoBettingFlow.js */
-  lobbyProbeMs: 3000,
+  /** Login form poll — tight loop until username field appears */
+  loginPollMs: 35,
+  /** First wait for lobby after login — short probe before DESKTOP launcher retry; keep generous (SPA + auth redirect). */
+  lobbyProbeMs: 12000,
   lobbyAfterDesktopMs: 60000,
   lobbyPollMs: 50,
   /** After typing game name — rely on tile waitFor (casinoBettingFlow). */
@@ -115,6 +116,91 @@ async function waitTimerVisibleReturnRoot(page, config) {
   throw lastErr;
 }
 
+/** Prefer session-bound page when still open (automation keeps game tab as session.page). */
+function getOpenGamePage(session, fallbackPage) {
+  try {
+    if (session?.page && !session.page.isClosed()) return session.page;
+  } catch {
+    /* stale reference */
+  }
+  try {
+    if (fallbackPage && !fallbackPage.isClosed()) return fallbackPage;
+  } catch {
+    /* ignore */
+  }
+  return fallbackPage;
+}
+
+/**
+ * Betting timer may appear on another tab or iframe; polling all pages + frames avoids
+ * waiting on a stale Page reference after foreground/rebind races ("browser has been closed").
+ */
+async function waitForBettingTimerPage(
+  context,
+  preferredPage,
+  config,
+  timeoutMs,
+  session,
+  signal
+) {
+  const openSel = effectiveTimerBettingOpen(config);
+  const sel = openSel || config.timer;
+  if (!sel || !String(sel).trim()) {
+    throw new Error("Betting config: missing timer selector");
+  }
+  const deadline = Date.now() + timeoutMs;
+  let lastErr;
+  while (Date.now() < deadline) {
+    checkNotCancelled(session, signal);
+    if (session?.browser && !session.browser.isConnected()) {
+      throw new Error("Browser session ended");
+    }
+    const tryPages = [];
+    const seen = new Set();
+    const add = (p) => {
+      if (!p) return;
+      try {
+        if (p.isClosed()) return;
+      } catch {
+        return;
+      }
+      if (seen.has(p)) return;
+      seen.add(p);
+      tryPages.push(p);
+    };
+    try {
+      if (context?.pages) {
+        for (const p of context.pages()) add(p);
+      }
+    } catch {
+      /* context may be closing */
+    }
+    add(preferredPage);
+    add(session?.page);
+
+    for (const page of tryPages) {
+      const roots = allFrameRoots(page);
+      for (const root of roots) {
+        try {
+          await root.locator(sel).first().waitFor({
+            state: "visible",
+            timeout: 900,
+          });
+          if (session && page) session.page = page;
+          console.log(
+            `[PerfTrace] Betting timer visible (${openSel ? "timerBettingOpen" : "timer"}) url=${page.url?.().slice(0, 80) || "?"}`
+          );
+          return page;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 180));
+  }
+  throw lastErr ?? new Error("Betting timer did not become visible");
+}
+
 /** First frame where `result` appears (may differ from timer frame on some builds). */
 async function waitResultVisibleReturnRoot(page, config) {
   const sel = config.result;
@@ -170,17 +256,23 @@ async function loginToCasino(page, user, pass, session, signal) {
   const userInput = ctx.locator('input[name="username"]').first();
   const passInput = ctx.locator('input[name="password"]').first();
 
-  await userInput.waitFor({ state: "visible", timeout: 12000 });
-  await passInput.waitFor({ state: "attached", timeout: 12000 });
+  await Promise.all([
+    userInput.waitFor({ state: "visible", timeout: 12000 }),
+    passInput.waitFor({ state: "attached", timeout: 12000 }),
+  ]);
 
-  await userInput.click();
-  await userInput.fill(user);
-  await passInput.click();
-  await passInput.fill(pass);
+  /**
+   * Pragmatic auth fields use `readonly` until focus — e.g. onfocus="this.removeAttribute('readonly')".
+   * `fill()` alone does not run that handler first, so Playwright sees a non-editable input and times out.
+   */
+  await userInput.click({ timeout: 8000 });
+  await userInput.fill(user, { timeout: 10000 });
+  await passInput.click({ timeout: 8000 });
+  await passInput.fill(pass, { timeout: 10000 });
 
   const verifyBtn = ctx.getByRole("button", { name: /verify me/i });
-  await verifyBtn.waitFor({ state: "visible", timeout: 12000 });
-  await verifyBtn.click();
+  await verifyBtn.waitFor({ state: "visible", timeout: 8000 });
+  await verifyBtn.click({ timeout: 8000 });
 }
 
 /**
@@ -337,7 +429,8 @@ async function waitForLobbyPage(context, opts) {
 async function searchAndClickFirstTileScript(lobbyPage, gameSearchText, searchTriggerTestId) {
   await lobbyPage.waitForLoadState("domcontentloaded").catch(() => {});
 
-  const search = lobbyPage.getByTestId(searchTriggerTestId);
+  // Portrait / responsive builds may render the same nav link twice (e.g. slider + main nav).
+  const search = lobbyPage.getByTestId(searchTriggerTestId).first();
   const input = lobbyPage.getByTestId("input-field").first();
 
   await search.waitFor({ state: "visible", timeout: 15000 });
@@ -375,7 +468,7 @@ async function searchAndClickFirstTileScript(lobbyPage, gameSearchText, searchTr
 async function searchAndClickFirstTile(lobbyPage, gameSearchText, searchTriggerTestId) {
   await lobbyPage.waitForLoadState("domcontentloaded").catch(() => {});
 
-  const search = lobbyPage.getByTestId(searchTriggerTestId);
+  const search = lobbyPage.getByTestId(searchTriggerTestId).first();
   const input = lobbyPage.getByTestId("input-field").first();
 
   await search.waitFor({ state: "visible", timeout: 15000 });
@@ -457,7 +550,16 @@ async function openLobbyAndLaunchGame(
     lobbyOptions?.lobbySearchTriggerTestId ?? "lobby-category-search";
 
   const automationMode = lobbyOptions?.automationMode || "observe";
-  const lobbyStyle = automationMode === "betting" ? "script" : "extended";
+  /**
+   * Always use **extended** lobby readiness (test ids + loose selectors + Pragmatic lobby URL fallbacks).
+   * Betting mode used to use `script` (exact test ids only) to mirror casinoBettingFlow.js — that caused
+   * flaky failures when the lobby was slow, A/B DOM differed, or readiness matched URL/input before nav
+   * labels appeared. The **click path** for betting (`searchAndClickFirstTileScript`) stays strict.
+   */
+  const lobbyStyle =
+    process.env.PERFTRACE_LOBBY_STRICT === "1" && automationMode === "betting"
+      ? "script"
+      : "extended";
 
   await page.waitForLoadState("domcontentloaded").catch(() => {});
   await page.waitForLoadState("load", { timeout: 8000 }).catch(() => {});
@@ -493,14 +595,23 @@ async function openLobbyAndLaunchGame(
   }
 
   if (!lobbyPage) {
-    const urls = context
-      .pages()
-      .filter((x) => !x.isClosed())
-      .map((x) => x.url());
-    const msg =
+    const openPages = context.pages().filter((x) => !x.isClosed());
+    const urls = openPages.map((x) => {
+      try {
+        return x.url();
+      } catch {
+        return "(url unreadable)";
+      }
+    });
+    const tabHint =
+      urls.length === 0
+        ? "No open tabs — browser may have closed the context, crashed, or every tab was torn down before we detected the lobby."
+        : `Open tabs (${urls.length}): ${urls.join(" | ")}.`;
+    const modeHint =
       lobbyStyle === "script"
-        ? `Lobby UI never appeared (casinoBettingFlow script mode: lobby-category-search or lobby-category-game-shows). Open tabs: ${urls.join(" | ")}.`
-        : `Lobby UI never appeared (tried test ids: ${lobbyReadyTestIds.join(", ")}; URL fallbacks; open tabs: ${urls.join(" | ")}). Set LOBBY_READY_TESTIDS or check auth/URL.`;
+        ? "Strict script mode (PERFTRACE_LOBBY_STRICT=1): only data-testid lobby-category-search | lobby-category-game-shows visible."
+        : `Extended readiness: test ids ${lobbyReadyTestIds.join(", ")}, loose lobby selectors, Pragmatic lobby URL + input-field / tile-container.`;
+    const msg = `Lobby UI never appeared after login (${modeHint}) ${tabHint} Set LOBBY_READY_TESTIDS, verify credentials/URL, or try a longer run / stable network.`;
     throw new Error(msg);
   }
 
@@ -558,6 +669,7 @@ async function waitScrollClick(page, selector, label) {
  */
 async function runBettingRounds(uiPage, numberOfRounds, config, session, signal) {
   uiPage.setDefaultTimeout(TIMING.betUiTimeoutMs);
+  const context = session.context;
 
   const totalRounds = resolveRoundsCount(numberOfRounds);
   if (session?.automation) {
@@ -569,36 +681,46 @@ async function runBettingRounds(uiPage, numberOfRounds, config, session, signal)
     `[PerfTrace] Betting loop: ${totalRounds} round(s) — chip + bet spot (casinoBettingFlow); raw rounds=${String(numberOfRounds)}`
   );
 
+  let roundPage = getOpenGamePage(session, uiPage);
+
   for (let i = 1; i <= totalRounds; i++) {
     checkNotCancelled(session, signal);
     if (session?.automation) session.automation.currentRound = i;
 
     console.log(`[PerfTrace] Betting round ${i} / ${totalRounds}`);
 
-    await uiPage
-      .locator(config.timer)
-      .first()
-      .waitFor({ state: "visible", timeout: 120000 });
+    roundPage = await waitForBettingTimerPage(
+      context,
+      roundPage,
+      config,
+      120000,
+      session,
+      signal
+    );
 
-    if (config.betSpot) {
-      await waitScrollClick(uiPage, config.chip, "chip");
-      await waitScrollClick(uiPage, config.betSpot, "bet spot");
-      console.log("[PerfTrace] Bet placed");
-      await getTimeoutPage(uiPage).waitForTimeout(500);
+    if (typeof session.rebindToActivePage === "function") {
+      await session.rebindToActivePage(roundPage);
     }
 
-    await uiPage
+    if (config.betSpot) {
+      await waitScrollClick(roundPage, config.chip, "chip");
+      await waitScrollClick(roundPage, config.betSpot, "bet spot");
+      console.log("[PerfTrace] Bet placed");
+      await getTimeoutPage(roundPage).waitForTimeout(500);
+    }
+
+    await roundPage
       .locator(config.waitForHidden || config.timer)
       .first()
       .waitFor({ state: "hidden", timeout: 120000 });
 
-    await uiPage
+    await roundPage
       .locator(config.result)
       .first()
       .waitFor({ state: "visible", timeout: 120000 });
     console.log(`[PerfTrace] Round ${i} result shown`);
 
-    await uiPage
+    await roundPage
       .locator(config.result)
       .first()
       .waitFor({ state: "hidden", timeout: 180000 });
@@ -614,6 +736,7 @@ async function runBettingRounds(uiPage, numberOfRounds, config, session, signal)
  */
 async function runObserveRounds(uiPage, numberOfRounds, config, session, signal) {
   uiPage.setDefaultTimeout(TIMING.betUiTimeoutMs);
+  const context = session.context;
 
   const totalRounds = resolveRoundsCount(numberOfRounds);
   const tp = getTimeoutPage(uiPage);
@@ -625,6 +748,8 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
   console.log(
     `[PerfTrace] Observe loop: ${totalRounds} round(s) — timer → result per round; between rounds: next timer (requested raw: ${String(numberOfRounds)})`
   );
+
+  let observePage = getOpenGamePage(session, uiPage);
 
   for (let roundIndex = 1; roundIndex <= totalRounds; roundIndex++) {
     checkNotCancelled(session, signal);
@@ -638,12 +763,22 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
     // Only wait for the betting timer before round 1. After that, the “next timer” wait at the end of the
     // previous iteration already aligned us with the next betting window (timer again).
     if (roundIndex === 1) {
-      await waitTimerVisibleReturnRoot(uiPage, config);
+      observePage = await waitForBettingTimerPage(
+        context,
+        observePage,
+        config,
+        120000,
+        session,
+        signal
+      );
+      if (typeof session.rebindToActivePage === "function") {
+        await session.rebindToActivePage(observePage);
+      }
     }
 
     // Avoid treating the previous round’s winning number as this round’s result (same node can stay visible).
     if (roundIndex > 1) {
-      for (const root of allFrameRoots(uiPage)) {
+      for (const root of allFrameRoots(observePage)) {
         await root
           .locator(config.result)
           .first()
@@ -652,7 +787,7 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
       }
     }
 
-    const resultRoot = await waitResultVisibleReturnRoot(uiPage, config);
+    const resultRoot = await waitResultVisibleReturnRoot(observePage, config);
     console.log("[PerfTrace] Round result visible.");
 
     if (isLastRound) {
@@ -670,7 +805,17 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
       });
 
     console.log("[PerfTrace] Waiting for next betting timer (round boundary)…");
-    await waitTimerVisibleReturnRoot(uiPage, config);
+    observePage = await waitForBettingTimerPage(
+      context,
+      observePage,
+      config,
+      120000,
+      session,
+      signal
+    );
+    if (typeof session.rebindToActivePage === "function") {
+      await session.rebindToActivePage(observePage);
+    }
   }
 
   console.log(`[PerfTrace] Observe loop finished after ${totalRounds} round(s).`);
@@ -744,6 +889,9 @@ async function runCasinoAutomation(session, opts) {
   session.page = gamePage;
   if (typeof session.rebindToActivePage === "function") {
     await session.rebindToActivePage(gamePage);
+  }
+  if (typeof session.markGamePageStart === "function") {
+    await session.markGamePageStart(gamePage);
   }
   setPhase(session, "game");
 
