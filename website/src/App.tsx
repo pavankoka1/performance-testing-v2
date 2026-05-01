@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
+import { Documentation } from "./components/Documentation";
 import { EyeWidget } from "./components/EyeWidget";
 import { ShaderCanvas } from "./components/ShaderCanvas";
 
@@ -73,11 +74,11 @@ const PIPELINE = [
   },
   {
     title: "Interact",
-    desc: "Exercise flows — scrolls, route changes, animations — while data streams in.",
+    desc: "Exercise flows — scrolls, route changes, animations — while data streams in. Set preload baseline or asset keys so charts can align to your game URL.",
   },
   {
     title: "Stop → report",
-    desc: "The server parses the CDP trace, merges in-page collectors, and builds FPS from both DrawFrame and rAF (per-second merge, full session on the time axis). You get charts, Web Vitals, TBT, assets, and an optional HTML download with capture metadata.",
+    desc: "Trace + live samples merge into one report. With a baseline (preload URL, asset keys, or automation game detection), charts and optional video share the same t = 0 at game surface — lobby/login trimmed. Export HTML with session settings.",
   },
 ];
 
@@ -138,11 +139,17 @@ export default function App() {
         <header className={`nav ${navScrolled ? "scrolled" : ""}`}>
           <span className="nav-brand">PerfTrace</span>
           <nav className="nav-links" aria-label="Page">
-            <a href="#metrics">Metrics</a>
+            <a href="#metrics">Coverage</a>
             <a href="#features">Product</a>
             <a href="#flow">Flow</a>
+            <a href="#guide">Guide</a>
+            <a href="#field-reference">Fields</a>
+            <a href="#metric-reference">Glossary</a>
             <a href="#download">Download</a>
           </nav>
+          <span className="nav-doc-mini">
+            <a href="#guide">Guide</a>
+          </span>
           <a className="nav-cta" href="#download">
             Get the app
           </a>
@@ -191,9 +198,9 @@ export default function App() {
             <h2 className="section-title">What the app actually measures</h2>
             <p className="section-desc">
               Live view + post-run report: CDP, Chrome trace (including
-              DrawFrame for FPS), in-page collectors, and network timing. FPS
-              combines trace and in-page per wall-clock second for a full-session
-              chart when either source has data.
+              DrawFrame for FPS), in-page collectors, and network timing. After a{" "}
+              <strong>preload or game baseline</strong>, the chart axis matches the
+              aligned capture window; FPS and CPU share the same timeline trim.
             </p>
           </div>
           <motion.div
@@ -278,6 +285,8 @@ export default function App() {
           </div>
         </section>
 
+        <Documentation />
+
         <section className="section">
           <div className="section-head">
             <p className="section-kicker">Under the hood</p>
@@ -345,6 +354,14 @@ export default function App() {
             <strong>PerfTrace</strong> · Self-hosted · No mandatory cloud · Your
             sessions stay on your hardware (or your VPS).
           </p>
+          <nav className="footer-doc-links" aria-label="Documentation shortcuts">
+            <a href="#guide">How to use</a>
+            <a href="#field-reference">Every field</a>
+            <a href="#check-metrics">Reading metrics</a>
+            <a href="#metric-reference">Metric reference</a>
+            <a href="#whats-new">What&apos;s new</a>
+            <a href="#download">Download</a>
+          </nav>
           <p style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
             Marketing site · App repo & docs live alongside the Electron +
             server codebase.
