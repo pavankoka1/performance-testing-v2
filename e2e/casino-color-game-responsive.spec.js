@@ -224,8 +224,8 @@ test.describe.configure({ mode: "serial" });
 
 const viewports = /** @type {const} */ ([
   { name: "Desktop", width: 1280, height: 800 },
-  { name: "Mobile Portrait", width: 390, height: 844 },
-  { name: "Mobile Landscape", width: 844, height: 390 },
+  { name: "Mobile Portrait", width: 375, height: 780 },
+  { name: "Mobile Landscape", width: 780, height: 375 },
 ]);
 
 for (const vp of viewports) {

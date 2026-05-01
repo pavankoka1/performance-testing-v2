@@ -12,6 +12,8 @@ type SessionVideoPlayerProps = {
    * (preload before URL baseline / game surface).
    */
   timelineOffsetSec?: number;
+  /** High-quality WebM can be large — use heavier preload & contain fit so preview decodes reliably. */
+  highQuality?: boolean;
   /** Fires on timeupdate (throttled by the browser / Plyr). */
   onTimeSecChange?: (sec: number) => void;
   className?: string;
@@ -21,6 +23,7 @@ function SessionVideoPlayerInner({
   src,
   maxDurationSec,
   timelineOffsetSec = 0,
+  highQuality = false,
   onTimeSecChange,
   className = "",
 }: SessionVideoPlayerProps) {
@@ -110,12 +113,14 @@ function SessionVideoPlayerInner({
   }, [src, maxDurationSec, offset]);
 
   return (
-    <div className={`session-video-shell ${className}`.trim()}>
+    <div
+      className={`session-video-shell ${highQuality ? "session-video-shell--hq" : ""} ${className}`.trim()}
+    >
       <video
         ref={videoRef}
         src={src}
         playsInline
-        preload="metadata"
+        preload={highQuality ? "auto" : "metadata"}
       />
     </div>
   );

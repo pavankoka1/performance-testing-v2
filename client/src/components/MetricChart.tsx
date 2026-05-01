@@ -92,7 +92,7 @@ export default function MetricChart({
               onClick={onOpenModal}
               className="cursor-pointer text-xs text-[var(--accent)] hover:underline"
             >
-              Open in modal
+              Detailed chart view
             </button>
           )}
           <span className="text-xs text-[var(--fg-muted)]">{unit}</span>

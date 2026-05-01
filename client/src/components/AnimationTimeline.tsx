@@ -6,13 +6,20 @@ import {
   filterAnimationPropertyKeys,
 } from "@/lib/animationUtils";
 import type { PerfReport } from "@/lib/reportTypes";
+import { Braces, Cpu, Gauge, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+
+type MetricPoint = { timeSec: number; value: number };
 
 type AnimationTimelineProps = {
   animations: NonNullable<PerfReport["animationMetrics"]>["animations"];
   durationSec: number;
   formatNumber: (value: number) => string;
+  /** Session FPS samples — used to correlate animation start with frame rate */
+  fpsPoints?: MetricPoint[];
+  /** Session CPU % samples — same timeline as charts */
+  cpuPoints?: MetricPoint[];
 };
 
 const BOTTLENECK_COLORS = {
@@ -22,6 +29,23 @@ const BOTTLENECK_COLORS = {
 } as const;
 
 const DEFAULT_BAR_MS = 500;
+
+function valueNearestTime(
+  points: MetricPoint[] | undefined,
+  timeSec: number,
+): number | null {
+  if (!points?.length) return null;
+  let best = points[0];
+  let bestD = Math.abs(points[0].timeSec - timeSec);
+  for (const p of points) {
+    const d = Math.abs(p.timeSec - timeSec);
+    if (d < bestD) {
+      best = p;
+      bestD = d;
+    }
+  }
+  return best.value;
+}
 
 type AnimationEntry = NonNullable<
   PerfReport["animationMetrics"]
@@ -36,71 +60,40 @@ type TimelineBar = AnimationEntry & {
   propsDisplay: string;
 };
 
-function formatAnimDetail(
-  anim: {
-    name?: string;
-    label?: string;
-    id?: string;
-    type?: string;
-    startTimeSec?: number;
-    durationMs?: number;
-    delayMs?: number;
-    properties?: string[];
-    bottleneck?: string;
-    bottleneckHint?: string;
-    targetHint?: string;
-  },
-  formatNum: (n: number) => string
-): string {
-  const lines: string[] = [];
-  lines.push(
-    `Name / label: ${animationDisplayLabel(anim.name, anim.properties)}`
+function animationPayloadJson(anim: {
+  id?: string;
+  name?: string;
+  type?: string;
+  startTimeSec?: number;
+  durationMs?: number;
+  delayMs?: number;
+  properties?: string[];
+  bottleneckHint?: string;
+  targetHint?: string;
+}): string {
+  return JSON.stringify(
+    {
+      id: anim.id,
+      name: anim.name,
+      type: anim.type,
+      startTimeSec: anim.startTimeSec,
+      durationMs: anim.durationMs,
+      delayMs: anim.delayMs,
+      properties: anim.properties,
+      bottleneckHint: anim.bottleneckHint,
+      targetHint: anim.targetHint,
+    },
+    null,
+    2
   );
-  lines.push(`CDP / internal id: ${anim.id ?? "—"}`);
-  lines.push(`Type: ${anim.type ?? "—"}`);
-  lines.push(
-    `Start (session timeline): ${anim.startTimeSec != null ? `${anim.startTimeSec.toFixed(3)}s` : "—"}`
-  );
-  lines.push(
-    `Duration: ${anim.durationMs != null ? `${formatNum(anim.durationMs)} ms` : "—"}`
-  );
-  lines.push(
-    `Delay: ${anim.delayMs != null ? `${formatNum(anim.delayMs)} ms` : "—"}`
-  );
-  const props = filterAnimationPropertyKeys(anim.properties ?? []);
-  lines.push(
-    `Animated CSS properties (${props.length}): ${props.length ? props.join(", ") : "—"}`
-  );
-  lines.push(
-    `Bottleneck: ${anim.bottleneck ?? anim.bottleneckHint ?? "—"}`
-  );
-  if (anim.targetHint) lines.push(`Target hint: ${anim.targetHint}`);
-  lines.push("");
-  lines.push("Raw report entry (JSON):");
-  lines.push(
-    JSON.stringify(
-      {
-        id: anim.id,
-        name: anim.name,
-        type: anim.type,
-        startTimeSec: anim.startTimeSec,
-        durationMs: anim.durationMs,
-        delayMs: anim.delayMs,
-        properties: anim.properties,
-        bottleneckHint: anim.bottleneckHint,
-        targetHint: anim.targetHint,
-      },
-      null,
-      2
-    )
-  );
-  return lines.join("\n");
 }
 
 function AnimationTimelineInner({
   animations,
   durationSec,
   formatNumber,
+  fpsPoints,
+  cpuPoints,
 }: AnimationTimelineProps) {
   const effectiveDuration = Math.max(durationSec, 1);
   const [modalBar, setModalBar] = useState<TimelineBar | null>(null);
@@ -288,7 +281,7 @@ function AnimationTimelineInner({
         typeof document !== "undefined" &&
         createPortal(
           <div
-            className="fixed inset-0 z-[10050] flex items-center justify-center bg-black/55 p-4"
+            className="fixed inset-0 z-[10050] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
             role="presentation"
             onClick={closeModal}
           >
@@ -296,27 +289,154 @@ function AnimationTimelineInner({
               role="dialog"
               aria-modal="true"
               aria-labelledby="animation-detail-title"
-              className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl ring-1 ring-black/20"
+              className="flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-violet-500/35 bg-gradient-to-b from-[#141018] via-[var(--bg-card)] to-[var(--bg-card)] shadow-[0_28px_90px_rgba(0,0,0,0.65)] ring-1 ring-violet-500/25"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-                <p
-                  id="animation-detail-title"
-                  className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]"
-                >
-                  Animation details
-                </p>
+              <div className="flex shrink-0 items-start justify-between gap-3 border-b border-violet-500/25 bg-violet-950/35 px-5 py-4">
+                <div className="min-w-0">
+                  <p
+                    id="animation-detail-title"
+                    className="text-[11px] font-bold uppercase tracking-[0.2em] text-violet-300"
+                  >
+                    Animation details
+                  </p>
+                  <p className="mt-2 text-lg font-bold leading-snug text-[var(--fg)]">
+                    {modalBar.label}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    Nearest samples on the session timeline when this animation
+                    starts — compare with FPS / CPU graphs for spikes or dips.
+                  </p>
+                </div>
                 <button
                   type="button"
-                  className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--fg)] transition hover:bg-[var(--bg-elevated)]"
+                  className="shrink-0 rounded-xl border border-white/15 p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
                   onClick={closeModal}
+                  aria-label="Close"
                 >
-                  Close
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-              <pre className="scrollbar-themed min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[10px] leading-relaxed text-[var(--fg-muted)]">
-                {formatAnimDetail(modalBar, formatNumber)}
-              </pre>
+
+              <div className="scrollbar-themed min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                {(() => {
+                  const t0 = modalBar.startTimeSec ?? 0;
+                  const fpsVal = valueNearestTime(fpsPoints, t0);
+                  const cpuVal = valueNearestTime(cpuPoints, t0);
+                  const showCorr =
+                    fpsVal != null || cpuVal != null;
+
+                  return (
+                    <>
+                      {showCorr && (
+                        <div className="mb-5 flex flex-wrap gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:gap-3">
+                          <div className="flex min-w-[140px] flex-1 items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-950/25 px-3 py-2">
+                            <Gauge className="h-4 w-4 shrink-0 text-emerald-400/90" />
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-200/75">
+                                FPS @ {t0.toFixed(2)}s
+                              </p>
+                              <p className="font-mono text-lg font-semibold tabular-nums leading-tight text-emerald-100/95 sm:text-xl">
+                                {fpsVal != null ? formatNumber(fpsVal) : "—"}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex min-w-[140px] flex-1 items-center gap-3 rounded-lg border border-amber-500/20 bg-amber-950/20 px-3 py-2">
+                            <Cpu className="h-4 w-4 shrink-0 text-amber-400/90" />
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-medium uppercase tracking-wider text-amber-200/75">
+                                CPU @ {t0.toFixed(2)}s
+                              </p>
+                              <p className="font-mono text-lg font-semibold tabular-nums leading-tight text-amber-50/95 sm:text-xl">
+                                {cpuVal != null
+                                  ? `${formatNumber(cpuVal)}%`
+                                  : "—"}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="w-full text-[11px] leading-snug text-zinc-500">
+                            Nearest samples on the same timeline as your charts —
+                            use with the FPS / CPU graphs to spot dips or spikes.
+                          </p>
+                        </div>
+                      )}
+
+                      <dl className="grid gap-3 text-sm text-zinc-200">
+                        <div className="rounded-lg border border-white/10 bg-black/25 px-4 py-3">
+                          <dt className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                            Type
+                          </dt>
+                          <dd className="mt-1 font-medium text-[var(--fg)]">
+                            {modalBar.type ?? "—"}
+                          </dd>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/25 px-4 py-3">
+                          <dt className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                            Timeline
+                          </dt>
+                          <dd className="mt-1">
+                            Start{" "}
+                            <span className="font-mono font-semibold text-violet-200">
+                              {modalBar.startTimeSec != null
+                                ? `${modalBar.startTimeSec.toFixed(3)}s`
+                                : "—"}
+                            </span>
+                            {" · "}
+                            Duration{" "}
+                            <span className="font-mono font-semibold text-violet-200">
+                              {modalBar.durationMs != null
+                                ? `${formatNumber(modalBar.durationMs)} ms`
+                                : "—"}
+                            </span>
+                            {modalBar.delayMs != null && (
+                              <>
+                                {" · "}
+                                Delay{" "}
+                                <span className="font-mono">
+                                  {formatNumber(modalBar.delayMs)} ms
+                                </span>
+                              </>
+                            )}
+                          </dd>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/25 px-4 py-3">
+                          <dt className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                            Animated properties
+                          </dt>
+                          <dd className="mt-1 break-words text-[13px] leading-relaxed text-zinc-100">
+                            {modalBar.propsDisplay || "—"}
+                          </dd>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/25 px-4 py-3">
+                          <dt className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                            Bottleneck hint
+                          </dt>
+                          <dd className="mt-1 font-semibold capitalize text-[var(--fg)]">
+                            {modalBar.bottleneck ?? "—"}
+                          </dd>
+                        </div>
+                      </dl>
+
+                      <section className="mt-8 overflow-hidden rounded-xl border border-fuchsia-500/35 bg-gradient-to-br from-[#1c1030] via-[#120a1a] to-[#0a0810] shadow-[0_0_40px_-12px_rgba(192,38,211,0.35),inset_0_1px_0_rgba(255,255,255,0.06)]">
+                        <div className="flex items-center justify-between gap-3 border-b border-fuchsia-500/25 bg-gradient-to-r from-fuchsia-950/50 to-violet-950/30 px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <Braces className="h-4 w-4 text-fuchsia-300" />
+                            <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-fuchsia-100">
+                              Serialized capture (JSON)
+                            </span>
+                          </div>
+                          <span className="rounded-md bg-black/40 px-2 py-0.5 font-mono text-[10px] text-fuchsia-200/90 ring-1 ring-fuchsia-500/25">
+                            report slice
+                          </span>
+                        </div>
+                        <pre className="scrollbar-themed max-h-[min(42vh,320px)] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[11px] leading-relaxed text-cyan-50/95 [text-shadow:0_0_24px_rgba(34,211,238,0.12)]">
+                          {animationPayloadJson(modalBar)}
+                        </pre>
+                      </section>
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           </div>,
           document.body

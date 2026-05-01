@@ -79,6 +79,7 @@ export default function Dashboard() {
             isProcessing={isProcessing}
             onStart={start}
             onStop={stop}
+            encourageStart={report == null && !isRecording && !isProcessing}
           />
 
           <MetricsGlossary onOpenHelp={setHelpModalMetricId} />

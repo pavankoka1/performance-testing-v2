@@ -35,12 +35,8 @@ export type RecordingStartOptions = {
   traceDetail?: TraceDetail;
   /** Pragmatic Live: login → lobby → game → N rounds; server stops trace when done. */
   automation?: AutomationStartPayload;
-  /** Landscape = maximized Chromium; portrait = fixed viewport + window size. */
-  layoutMode?: "landscape" | "portrait";
-  /** Portrait inner viewport width (content pixels). */
-  viewportWidth?: number;
-  /** Portrait inner viewport height (content pixels). */
-  viewportHeight?: number;
+  /** desktop = maximized Chromium; portrait / mobileLandscape = fixed mobile window (server presets). */
+  layoutMode?: "desktop" | "portrait" | "mobileLandscape" | "landscape";
   /**
    * Manual SPA: start preload/network baseline when the visible tab URL contains this string.
    * Ignored if `assetBaselineUrlRegex` is set.
@@ -139,9 +135,10 @@ export function useRecording() {
             traceDetail: options?.traceDetail ?? "full",
             assetGameKeys: options?.assetGameKeys ?? [],
             automation: automationBody,
-            layoutMode: options?.layoutMode ?? "landscape",
-            viewportWidth: options?.viewportWidth,
-            viewportHeight: options?.viewportHeight,
+            layoutMode:
+              options?.layoutMode === "landscape"
+                ? "desktop"
+                : (options?.layoutMode ?? "desktop"),
             ...(typeof options?.assetBaselineUrlRegex === "string" &&
             options.assetBaselineUrlRegex.trim()
               ? {

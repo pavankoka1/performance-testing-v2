@@ -155,8 +155,11 @@ export type CaptureSettings = {
   recordVideo: boolean;
   videoQuality: "low" | "high";
   browserLayout:
+    | { mode: "desktop" }
+    /** @deprecated Older reports used "landscape" for maximized desktop */
     | { mode: "landscape" }
-    | { mode: "portrait"; width: number; height: number };
+    | { mode: "portrait"; width: number; height: number }
+    | { mode: "mobileLandscape"; width: number; height: number };
   automation?: {
     enabled: boolean;
     gameId?: string;

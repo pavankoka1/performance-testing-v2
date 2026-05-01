@@ -35,8 +35,12 @@ export function summarizeCaptureSettings(cs: CaptureSettings): string {
     `Trace ${cs.traceDetail}`,
     cs.recordVideo ? `Video ${cs.videoQuality}` : "Video off",
     cs.browserLayout.mode === "portrait"
-      ? `Portrait ${cs.browserLayout.width}×${cs.browserLayout.height}`
-      : "Landscape / maximized",
+      ? `Mobile portrait ${cs.browserLayout.width}×${cs.browserLayout.height} (fixed)`
+      : cs.browserLayout.mode === "mobileLandscape"
+        ? `Mobile landscape ${cs.browserLayout.width}×${cs.browserLayout.height} (fixed)`
+        : cs.browserLayout.mode === "landscape"
+          ? "Desktop (maximized)"
+          : "Desktop (maximized)",
   ];
   if (cs.automation?.enabled && cs.automation.gameId) {
     parts.push(

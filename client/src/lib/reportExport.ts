@@ -65,8 +65,12 @@ function buildCaptureSettingsPanel(cs: CaptureSettings): string {
   const netDetail = `RTT ${cs.networkProfile.latencyMs} ms · ↓ ${formatThroughputBps(cs.networkProfile.downloadBps)} · ↑ ${formatThroughputBps(cs.networkProfile.uploadBps)}`;
   const layoutLabel =
     cs.browserLayout.mode === "portrait"
-      ? `Portrait ${cs.browserLayout.width}×${cs.browserLayout.height}`
-      : "Landscape (maximized)";
+      ? `Mobile portrait ${cs.browserLayout.width}×${cs.browserLayout.height} (fixed)`
+      : cs.browserLayout.mode === "mobileLandscape"
+        ? `Mobile landscape ${cs.browserLayout.width}×${cs.browserLayout.height} (fixed)`
+        : cs.browserLayout.mode === "landscape"
+          ? "Desktop (maximized)"
+          : "Desktop (maximized)";
   const automationBlock =
     cs.automation?.enabled && cs.automation.gameId
       ? `<div class="card-val card-span-2"><span class="lbl">Automation</span><div class="card-value card-value-tight">${escapeHtml(String(cs.automation.gameId))}${cs.automation.rounds != null ? ` · ${cs.automation.rounds} rounds` : ""}${cs.automation.skipLobby ? " · skip lobby" : ""}</div></div>`
@@ -83,6 +87,165 @@ function buildCaptureSettingsPanel(cs: CaptureSettings): string {
       ${automationBlock}
     </div>
   </section>`;
+}
+
+/** Mirrors the in-app “Files loaded” section: hero cards, pills, categories, then full table. */
+function buildFilesLoadedSectionHtml(report: PerfReport): string {
+  const da = report.downloadedAssets;
+  if (!da || da.totalCount <= 0) return "";
+
+  const assetLabels: Record<string, string> = {
+    build: "Main document",
+    script: "Scripts (.js)",
+    stylesheet: "Stylesheets (.css)",
+    document: "Other documents",
+    json: "API / fetch calls",
+    image: "Images",
+    font: "Fonts",
+    other: "Other",
+  };
+  const assetCategories = [
+    "build",
+    "script",
+    "stylesheet",
+    "document",
+    "json",
+    "image",
+    "font",
+    "other",
+  ] as const;
+
+  const dupList = da.duplicates ?? [];
+  const dupStats = da.duplicateStats;
+  const duplicatesSectionHtml =
+    dupList.length > 0
+      ? `
+  <h3>Duplicate image fetches</h3>
+  <p class="muted">Same image URL requested more than once in the captured network log (API / XHR repeats are excluded). Counts use CDP network data only (not double-counted with Resource Timing).</p>
+  <p><strong>${dupStats?.uniqueUrls ?? dupList.length}</strong> URL${
+    (dupStats?.uniqueUrls ?? dupList.length) === 1 ? "" : "s"
+  } with repeated fetches · <strong>${
+    dupStats?.extraFetches ??
+    dupList.reduce((s, d) => s + Math.max(0, d.count - 1), 0)
+  }</strong> extra round-trip${
+    (dupStats?.extraFetches ??
+      dupList.reduce((s, d) => s + Math.max(0, d.count - 1), 0)) === 1
+      ? ""
+      : "s"
+  } vs loading each once</p>
+  <div class="table-scroll scrollbar">
+  <table>
+    <thead><tr><th>URL</th><th>Fetches</th><th>Total transferred</th></tr></thead>
+    <tbody>
+      ${dupList
+        .map(
+          (d) =>
+            `<tr><td class="url-cell">${escapeHtml(d.url)}</td><td>${d.count}</td><td>${formatBytes(d.totalBytes)}</td></tr>`
+        )
+        .join("")}
+    </tbody>
+  </table>
+  </div>`
+      : "";
+
+  const heroHtml =
+    da.curtainLiftMs != null
+      ? `<div class="files-hero-grid">
+    <div class="files-hero files-hero-preload">
+      <p class="files-hero-kicker">Preload size (until curtain lift)</p>
+      <p class="files-hero-value">${formatBytes(
+        da.lifecycleTotals?.preload.totalBytes ?? 0
+      )}</p>
+      <p class="files-hero-desc">${da.lifecycleTotals?.preload.totalCount ?? 0} files transferred before the curtain clears — primary load cost.</p>
+    </div>
+    <div class="files-hero files-hero-curtain">
+      <p class="files-hero-kicker">Curtain lift time</p>
+      <p class="files-hero-value">${formatNum(da.curtainLiftMs / 1000)}<span class="files-hero-unit">s</span></p>
+      <p class="files-hero-desc">When the loading curtain finishes — use with preload bytes to judge spinner vs payload.</p>
+    </div>
+  </div>`
+      : "";
+
+  const pills: string[] = [];
+  if (da.initialLoadBytes != null) {
+    pills.push(
+      `<span class="files-pill files-pill-muted">Initial screen (~FCP path): <strong>${formatBytes(
+        da.initialLoadBytes
+      )}</strong></span>`
+    );
+  }
+  if (da.curtainLiftMs != null) {
+    pills.push(
+      `<span class="files-pill files-pill-sky">Post-load: <strong>${formatBytes(
+        da.lifecycleTotals?.postload.totalBytes ?? 0
+      )}</strong> <span class="muted-inline">(${
+        da.lifecycleTotals?.postload.totalCount ?? 0
+      } files)</span></span>`
+    );
+  }
+  pills.push(
+    `<span class="files-pill files-pill-accent">Full session: <strong>${formatBytes(
+      da.sessionTotalBytes ?? da.totalBytes
+    )}</strong> <span class="muted-inline">(${da.totalCount} files)</span></span>`
+  );
+  if (dupList.length > 0) {
+    pills.push(
+      `<span class="files-pill files-pill-warn">Repeat fetches: ${
+        dupStats?.uniqueUrls ?? dupList.length
+      } URL${(dupStats?.uniqueUrls ?? dupList.length) === 1 ? "" : "s"}${
+        dupStats != null ? ` · +${dupStats.extraFetches} extra` : ""
+      }</span>`
+    );
+  }
+  if (da.lifecycleTotalsByScope != null && da.curtainLiftMs != null) {
+    pills.push(
+      `<span class="files-pill files-pill-violet">Game preload: <strong>${formatBytes(
+        da.lifecycleTotalsByScope.game.preload.totalBytes
+      )}</strong></span>`
+    );
+    pills.push(
+      `<span class="files-pill files-pill-slate">Common preload: <strong>${formatBytes(
+        da.lifecycleTotalsByScope.common.preload.totalBytes
+      )}</strong></span>`
+    );
+  }
+
+  const categoryGrid = assetCategories
+    .map((cat) => {
+      const data = da.byCategory[cat];
+      if (!data || data.count === 0) return "";
+      return `<div class="card"><span class="card-label">${escapeHtml(assetLabels[cat] ?? cat)}</span><div class="card-value">${data.count} files · ${formatBytes(data.totalBytes)}</div></div>`;
+    })
+    .filter(Boolean)
+    .join("");
+
+  const fileRows = assetCategories
+    .flatMap((cat) => {
+      const data = da.byCategory[cat];
+      if (!data || data.files.length === 0) return [];
+      return data.files.map(
+        (f) =>
+          `<tr><td>${escapeHtml(assetLabels[cat] ?? cat)}</td><td class="url-cell">${escapeHtml(f.url)}</td><td>${f.transferSize != null ? formatBytes(f.transferSize) : "—"}</td></tr>`
+      );
+    })
+    .join("");
+
+  return `<section class="files-loaded-panel" aria-label="Files loaded during session">
+  <h2 class="h-files">Files loaded during this session</h2>
+  <p class="muted files-lead">Preload, categories, and full transfer footprint — matches the in-app report order (files before CDP charts &amp; trace metrics).</p>
+  <p class="files-badge-wrap"><span class="files-count-badge">${da.totalCount} files</span></p>
+  ${heroHtml}
+  <div class="files-pills">${pills.join("")}</div>
+  <div class="grid">${categoryGrid}</div>
+  ${duplicatesSectionHtml}
+  <h3 class="muted" style="font-size:0.9rem;margin-top:1.25rem">All captured files</h3>
+  <div class="table-scroll scrollbar">
+  <table>
+    <thead><tr><th>Category</th><th>URL</th><th>Size</th></tr></thead>
+    <tbody>${fileRows || "<tr><td colspan='3'>No files.</td></tr>"}</tbody>
+  </table>
+  </div>
+</section>`;
 }
 
 export function buildReportHtml(report: PerfReport): string {
@@ -147,130 +310,7 @@ export function buildReportHtml(report: PerfReport): string {
     )
     .join("");
 
-  const assetLabels: Record<string, string> = {
-    build: "Build (main HTML)",
-    script: "Scripts (.js)",
-    stylesheet: "Styles (.css)",
-    document: "Other documents",
-    json: "API responses (XHR/fetch)",
-    image: "Images",
-    font: "Fonts",
-    other: "Other",
-  };
-  const assetCategories = [
-    "build",
-    "script",
-    "stylesheet",
-    "document",
-    "json",
-    "image",
-    "font",
-    "other",
-  ] as const;
-
-  const dupList = report.downloadedAssets?.duplicates ?? [];
-  const dupStats = report.downloadedAssets?.duplicateStats;
-  const duplicatesSectionHtml =
-    dupList.length > 0
-      ? `
-  <h3>Duplicate image fetches</h3>
-  <p class="muted">Same image URL requested more than once in the captured network log (API / XHR repeats are excluded). Counts use CDP network data only (not double-counted with Resource Timing).</p>
-  <p><strong>${dupStats?.uniqueUrls ?? dupList.length}</strong> URL${
-    (dupStats?.uniqueUrls ?? dupList.length) === 1 ? "" : "s"
-  } with repeated fetches · <strong>${
-    dupStats?.extraFetches ??
-    dupList.reduce((s, d) => s + Math.max(0, d.count - 1), 0)
-  }</strong> extra round-trip${
-    (dupStats?.extraFetches ??
-      dupList.reduce((s, d) => s + Math.max(0, d.count - 1), 0)) === 1
-      ? ""
-      : "s"
-  } vs loading each once</p>
-  <div class="table-scroll scrollbar">
-  <table>
-    <thead><tr><th>URL</th><th>Fetches</th><th>Total transferred</th></tr></thead>
-    <tbody>
-      ${dupList
-        .map(
-          (d) =>
-            `<tr><td class="url-cell">${escapeHtml(d.url)}</td><td>${d.count}</td><td>${formatBytes(d.totalBytes)}</td></tr>`
-        )
-        .join("")}
-    </tbody>
-  </table>
-  </div>`
-      : "";
-
-  const downloadedAssetsInner =
-    report.downloadedAssets && report.downloadedAssets.totalCount > 0
-      ? `
-  <p class="muted">Full session (game build): <strong class="metric-warn">${formatBytes(
-    report.downloadedAssets.sessionTotalBytes ??
-      report.downloadedAssets.totalBytes
-  )}</strong> · ${report.downloadedAssets.totalCount} files${
-    report.downloadedAssets.initialLoadBytes != null
-      ? ` · Initial load (FCP path ~): <strong>${formatBytes(
-          report.downloadedAssets.initialLoadBytes
-        )}</strong>`
-      : ""
-  }${
-    report.downloadedAssets.curtainLiftMs != null
-      ? ` · Curtain lift: <strong>${formatNum(
-          report.downloadedAssets.curtainLiftMs / 1000
-        )}s</strong> · Preload: <strong>${formatBytes(
-          report.downloadedAssets.lifecycleTotals?.preload.totalBytes ?? 0
-        )}</strong> · Post-load: <strong>${formatBytes(
-          report.downloadedAssets.lifecycleTotals?.postload.totalBytes ?? 0
-        )}</strong>`
-      : ""
-  }  ${
-    dupList.length > 0
-      ? ` · <strong class="metric-warn">Duplicate images:</strong> ${dupStats?.uniqueUrls ?? dupList.length} URL${(dupStats?.uniqueUrls ?? dupList.length) === 1 ? "" : "s"}`
-      : ""
-  }${
-    report.downloadedAssets.curtainLiftMs != null &&
-    report.downloadedAssets.lifecycleTotalsByScope != null
-      ? ` · <strong>Game preload:</strong> ${formatBytes(
-          report.downloadedAssets.lifecycleTotalsByScope.game.preload.totalBytes
-        )} (${report.downloadedAssets.lifecycleTotalsByScope.game.preload.totalCount} files) · <strong>Common preload:</strong> ${formatBytes(
-          report.downloadedAssets.lifecycleTotalsByScope.common.preload.totalBytes
-        )} (${report.downloadedAssets.lifecycleTotalsByScope.common.preload.totalCount} files)`
-      : ""
-  }</p>
-  ${duplicatesSectionHtml}
-  <div class="grid">
-    ${assetCategories
-      .map((cat) => {
-        const data = report.downloadedAssets!.byCategory[cat];
-        if (!data || data.count === 0) return "";
-        return `<div class="card"><span class="card-label">${escapeHtml(assetLabels[cat] ?? cat)}</span><div class="card-value">${data.count} files · ${formatBytes(data.totalBytes)}</div></div>`;
-      })
-      .filter(Boolean)
-      .join("")}
-  </div>
-  <div class="table-scroll scrollbar">
-  <table>
-    <thead><tr><th>Category</th><th>URL</th><th>Size</th></tr></thead>
-    <tbody>
-      ${assetCategories
-        .flatMap((cat) => {
-          const data = report.downloadedAssets!.byCategory[cat];
-          if (!data || data.files.length === 0) return [];
-          return data.files.map(
-            (f) =>
-              `<tr><td>${escapeHtml(assetLabels[cat] ?? cat)}</td><td class="url-cell">${escapeHtml(f.url)}</td><td>${f.transferSize != null ? formatBytes(f.transferSize) : "—"}</td></tr>`
-          );
-        })
-        .join("")}
-    </tbody>
-  </table>
-  </div>`
-      : "";
-
-  const downloadedAssetsSection =
-    downloadedAssetsInner && downloadedAssetsInner.length > 0
-      ? collapsibleSection("Downloaded files", downloadedAssetsInner)
-      : "";
+  const filesLoadedSection = buildFilesLoadedSectionHtml(report);
 
   const blockingInner =
     report.blockingSummary &&
@@ -575,6 +615,139 @@ export function buildReportHtml(report: PerfReport): string {
     .capture-detail { margin: 0.35rem 0 0; font-size: 0.8rem; line-height: 1.45; }
     .session-pill { font-size: 0.8rem; margin: 0.6rem 0 0; color: var(--muted); }
     .session-pill code { font-size: 0.85em; padding: 0.15rem 0.5rem; background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.25); border-radius: 6px; color: #c4b5fd; }
+    .files-loaded-panel {
+      margin: 0 0 2.25rem;
+      padding: 1.35rem 1.5rem 1.5rem;
+      background: linear-gradient(165deg, rgba(109,40,217,0.1), rgba(8,8,11,0.4));
+      border: 1px solid var(--border);
+      border-radius: 0.85rem;
+    }
+    .h-files {
+      font-size: 1.35rem;
+      margin: 0 0 0.35rem;
+      border: none;
+      padding: 0;
+      color: var(--fg);
+      background: linear-gradient(135deg,#c4b5fd,#a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .files-lead { margin: 0 0 0.75rem; max-width: 42rem; line-height: 1.55; }
+    .files-badge-wrap { margin: 0 0 1rem; }
+    .files-count-badge {
+      display: inline-block;
+      padding: 0.2rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: rgba(139,92,246,0.18);
+      color: #c4b5fd;
+      border: 1px solid rgba(139,92,246,0.35);
+    }
+    .files-hero-grid {
+      display: grid;
+      gap: 1rem;
+      margin: 0 0 1.25rem;
+    }
+    @media (min-width: 900px) {
+      .files-hero-grid { grid-template-columns: 1fr 1fr; }
+    }
+    .files-hero {
+      border-radius: 1rem;
+      padding: 1.35rem 1.25rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .files-hero-preload {
+      border: 1px solid rgba(167,139,250,0.55);
+      background: linear-gradient(145deg, rgba(124,58,237,0.42), rgba(76,29,149,0.35), rgba(15,10,35,0.65));
+      box-shadow: 0 18px 50px rgba(45,15,90,0.45);
+    }
+    .files-hero-curtain {
+      border: 1px solid rgba(139,92,246,0.45);
+      background: linear-gradient(180deg, rgba(139,92,246,0.22), rgba(139,92,246,0.06));
+      box-shadow: 0 12px 40px rgba(79,70,229,0.12);
+    }
+    .files-hero-kicker {
+      margin: 0;
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(237,233,254,0.95);
+    }
+    .files-hero-curtain .files-hero-kicker { color: #a78bfa; }
+    .files-hero-value {
+      margin: 0.65rem 0 0;
+      font-family: ui-monospace, monospace;
+      font-size: clamp(2rem, 5vw, 2.75rem);
+      font-weight: 700;
+      line-height: 1.05;
+      color: #fafafa;
+      word-break: break-all;
+    }
+    .files-hero-curtain .files-hero-value { color: var(--fg); }
+    .files-hero-unit {
+      margin-left: 0.35rem;
+      font-size: 1.35rem;
+      font-weight: 600;
+      vertical-align: super;
+      color: var(--muted);
+    }
+    .files-hero-desc {
+      margin: 0.75rem 0 0;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: rgba(237,233,254,0.92);
+    }
+    .files-hero-curtain .files-hero-desc { color: var(--muted); }
+    .files-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 0 0 1.25rem;
+    }
+    .files-pill {
+      display: inline-block;
+      padding: 0.45rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+    .files-pill-muted {
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+      color: var(--muted);
+    }
+    .files-pill-sky {
+      border: 1px solid rgba(56,189,248,0.4);
+      background: rgba(14,165,233,0.12);
+      color: #bae6fd;
+      font-weight: 500;
+    }
+    .files-pill-accent {
+      border: 1px solid rgba(139,92,246,0.45);
+      background: rgba(139,92,246,0.12);
+      color: #c4b5fd;
+      font-weight: 500;
+    }
+    .files-pill-warn {
+      border: 1px solid rgba(251,113,133,0.35);
+      background: rgba(244,63,94,0.1);
+      color: #fecdd3;
+    }
+    .files-pill-violet {
+      border: 1px solid rgba(167,139,250,0.45);
+      background: rgba(109,40,217,0.15);
+      color: #e9d5ff;
+      font-weight: 500;
+    }
+    .files-pill-slate {
+      border: 1px solid rgba(148,163,184,0.35);
+      background: rgba(71,85,105,0.15);
+      color: #e2e8f0;
+    }
+    .muted-inline { color: var(--muted); font-weight: 400; }
   </style>
 </head>
 <body>
@@ -599,6 +772,8 @@ export function buildReportHtml(report: PerfReport): string {
 
   ${captureSettingsPanel}
 
+  ${filesLoadedSection}
+
   <h2>Summary</h2>
   <div class="grid">
     <div class="card-val"><span class="lbl">Avg FPS</span><div class="card-value ${spanClass(fpsHealth(fpsAvg))}">${formatNum(fpsAvg)}</div></div>
@@ -621,7 +796,6 @@ export function buildReportHtml(report: PerfReport): string {
   ${renderBreakdownSection}
   ${blockingSection}
   ${tbtSection}
-  ${downloadedAssetsSection}
   ${networkSection}
   ${animationsSection}
   ${longTasksSection}

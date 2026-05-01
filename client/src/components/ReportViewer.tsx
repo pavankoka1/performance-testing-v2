@@ -370,7 +370,11 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
           <div className="space-y-5">
             {report.downloadedAssets.curtainLiftMs != null && (
               <div className="grid gap-4 lg:grid-cols-2">
-                <div className="relative overflow-hidden rounded-2xl border border-violet-500/50 bg-gradient-to-br from-violet-600/45 via-fuchsia-600/25 to-violet-950/50 p-6 shadow-xl shadow-violet-950/50">
+                <button
+                  type="button"
+                  onClick={() => setAssetsModalOpen(true)}
+                  className="relative overflow-hidden rounded-2xl border border-violet-500/50 bg-gradient-to-br from-violet-600/45 via-fuchsia-600/25 to-violet-950/50 p-6 text-left shadow-xl shadow-violet-950/50 transition hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
+                >
                   <div
                     className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-fuchsia-400/25 blur-3xl"
                     aria-hidden
@@ -390,8 +394,15 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
                     files transferred before the curtain clears — primary load
                     cost.
                   </p>
-                </div>
-                <div className="flex flex-col justify-center rounded-2xl border border-[var(--accent)]/50 bg-gradient-to-b from-[var(--accent)]/25 to-[var(--accent)]/8 p-6 shadow-lg shadow-[var(--accent)]/15">
+                  <p className="relative mt-4 text-[11px] font-medium text-violet-200/90">
+                    Click to open full file list
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssetsModalOpen(true)}
+                  className="flex flex-col justify-center rounded-2xl border border-[var(--accent)]/50 bg-gradient-to-b from-[var(--accent)]/25 to-[var(--accent)]/8 p-6 text-left shadow-lg shadow-[var(--accent)]/15 transition hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                >
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--accent)]">
                     Curtain lift time
                   </p>
@@ -405,7 +416,10 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
                     When the loading curtain finishes — use with preload bytes
                     to judge spinner vs payload.
                   </p>
-                </div>
+                  <p className="mt-4 text-[11px] font-medium text-[var(--accent)]">
+                    Click to open full file list
+                  </p>
+                </button>
               </div>
             )}
 
@@ -710,6 +724,8 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
             animations={report.animationMetrics.animations}
             durationSec={chartTimelineDurationSec}
             formatNumber={formatNumber}
+            fpsPoints={report.fpsSeries.points}
+            cpuPoints={report.cpuSeries.points}
           />
         </ReportCollapsible>
       )}
@@ -1065,6 +1081,7 @@ function ReportViewer({ report, onOpenHelp }: ReportViewerProps) {
             src={`${report.video.url}?t=${encodeURIComponent(report.stoppedAt)}`}
             maxDurationSec={videoMaxDurationSec}
             timelineOffsetSec={report.video.timelineOffsetSec ?? 0}
+            highQuality={report.captureSettings?.videoQuality === "high"}
           />
         </ReportCollapsible>
       )}

@@ -109,3 +109,22 @@ body {
 .animate-fade-in-delay-3 {
   animation-delay: 0.15s;
 }
+
+/* Idle hint on Start — very subtle glow + micro scale (no “bounce”) */
+@keyframes perftrace-heartbeat {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 20px rgba(79, 70, 229, 0.14);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(1.012);
+    box-shadow: 0 0 28px rgba(139, 92, 246, 0.22);
+    filter: brightness(1.03);
+  }
+}
+
+.animate-perftrace-heartbeat {
+  animation: perftrace-heartbeat 2.6s ease-in-out infinite;
+}

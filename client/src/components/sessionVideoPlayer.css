@@ -73,3 +73,12 @@
   max-height: inherit;
   background: #000;
 }
+
+/** Large / high-bitrate WebM: contain avoids aggressive crop; pairs with preload=auto in component. */
+.session-video-shell--hq video {
+  object-fit: contain;
+}
+
+.session-video-shell--hq .plyr__video-wrapper {
+  max-height: min(75vh, 48rem);
+}

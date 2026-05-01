@@ -17,22 +17,22 @@ function AnimationLayersHelpModal({ onClose }: Props) {
 
   const modal = (
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
       role="dialog"
       aria-modal="true"
       aria-labelledby="anim-layers-title"
       onClick={onClose}
     >
       <div
-        className="scrollbar-themed max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] shadow-xl"
+        className="scrollbar-themed max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-violet-500/35 bg-gradient-to-b from-[#14141c] to-[var(--bg-card)] shadow-[0_24px_80px_rgba(0,0,0,0.65)] ring-1 ring-violet-500/20"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
-          <div className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5 shrink-0 text-[var(--accent)]" />
+        <div className="flex items-start justify-between gap-3 border-b border-violet-500/25 bg-violet-950/30 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <BookOpen className="h-6 w-6 shrink-0 text-violet-300" />
             <h2
               id="anim-layers-title"
-              className="text-lg font-semibold text-[var(--fg)]"
+              className="text-xl font-bold tracking-tight text-[var(--fg)]"
             >
               Compositor vs paint vs layout
             </h2>
@@ -40,70 +40,69 @@ function AnimationLayersHelpModal({ onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-[var(--fg-muted)] transition hover:bg-[var(--bg-elevated)] hover:text-[var(--fg)]"
+            className="rounded-lg p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="space-y-4 px-5 py-4 text-sm leading-relaxed text-[var(--fg-muted)]">
-          <p className="text-[var(--fg)]">
-            Browsers render in <strong>stages</strong>. CSS animations target
-            different stages — that&apos;s what the colors in the timeline mean.
+        <div className="space-y-6 px-6 py-6 text-base leading-relaxed text-zinc-300">
+          <p className="text-[17px] font-medium text-zinc-100">
+            Browsers render in <strong className="text-white">stages</strong>.
+            CSS animations target different stages — that&apos;s what the colors
+            in the timeline mean.
           </p>
 
-          <section>
-            <h3 className="mb-1.5 font-semibold text-emerald-400">
+          <section className="rounded-xl border border-emerald-500/25 bg-emerald-950/40 p-5">
+            <h3 className="mb-2 text-lg font-bold text-emerald-300">
               Compositor (green)
             </h3>
-            <p>
-              Changes that can run on the <strong>GPU compositor thread</strong>{" "}
+            <p className="text-[15px] text-zinc-200">
+              Changes that can run on the{" "}
+              <strong className="text-white">GPU compositor thread</strong>{" "}
               without recalculating layout or repainting pixels every frame —
-              most often <code className="text-[var(--accent)]">transform</code>{" "}
-              and <code className="text-[var(--accent)]">opacity</code>.
-              Typically the cheapest path for smooth motion.
+              most often{" "}
+              <code className="rounded bg-emerald-950/80 px-1.5 py-0.5 text-sm text-emerald-200">
+                transform
+              </code>{" "}
+              and{" "}
+              <code className="rounded bg-emerald-950/80 px-1.5 py-0.5 text-sm text-emerald-200">
+                opacity
+              </code>
+              . Typically the cheapest path for smooth motion.
             </p>
           </section>
 
-          <section>
-            <h3 className="mb-1.5 font-semibold text-amber-400">
+          <section className="rounded-xl border border-amber-500/30 bg-amber-950/35 p-5">
+            <h3 className="mb-2 text-lg font-bold text-amber-300">
               Paint (amber)
             </h3>
-            <p>
-              <strong>Rasterization</strong>: colors, shadows, filters, rounded
-              corners (
-              <code className="text-[var(--accent)]">border-*-radius</code>
+            <p className="text-[15px] text-zinc-200">
+              <strong className="text-white">Rasterization</strong>: colors,
+              shadows, filters, rounded corners (
+              <code className="rounded bg-amber-950/80 px-1.5 py-0.5 text-sm text-amber-100">
+                border-*-radius
+              </code>
               ), backgrounds, outlines. The engine repaints affected regions;
               cost grows with area and effect complexity.
             </p>
           </section>
 
-          <section>
-            <h3 className="mb-1.5 font-semibold text-rose-400">Layout (red)</h3>
-            <p>
-              <strong>Reflow</strong>: geometry and text —{" "}
-              <code className="text-[var(--accent)]">width</code>,{" "}
-              <code className="text-[var(--accent)]">height</code>,{" "}
-              <code className="text-[var(--accent)]">margin</code>,{" "}
-              <code className="text-[var(--accent)]">padding</code>,{" "}
-              <code className="text-[var(--accent)]">flex</code>/
-              <code>grid</code>,{" "}
-              <code className="text-[var(--accent)]">font-size</code>, etc.
+          <section className="rounded-xl border border-rose-500/30 bg-rose-950/35 p-5">
+            <h3 className="mb-2 text-lg font-bold text-rose-300">Layout (red)</h3>
+            <p className="text-[15px] text-zinc-200">
+              <strong className="text-white">Reflow</strong>: geometry and text
+              — width, height, margin, padding, flex/grid, font-size, etc.
               Usually the most expensive for main-thread animation.
             </p>
           </section>
 
-          <p className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]/60 p-3 text-xs">
+          <p className="rounded-xl border border-violet-500/25 bg-violet-950/40 p-4 text-sm leading-relaxed text-zinc-300">
             PerfTrace classifies each animated property using these rules.
             Metadata keys from the Web Animations API (e.g.{" "}
-            <code className="text-[var(--accent)]">computedOffset</code>) are
+            <code className="text-violet-200">computedOffset</code>) are
             stripped — they are not CSS properties. When transitions omit
-            property lists, we infer from the animation name (e.g.{" "}
-            <code className="text-[var(--accent)]">box-shadow</code>,{" "}
-            <code className="text-[var(--accent)]">
-              border-bottom-left-radius
-            </code>
-            ).
+            property lists, we infer from the animation name.
           </p>
         </div>
       </div>

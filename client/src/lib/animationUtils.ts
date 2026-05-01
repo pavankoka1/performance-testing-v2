@@ -21,6 +21,20 @@ const META_KEYS = new Set([
   "flexgrow",
   "flexshrink",
   "flexbasis",
+  /** Web Animations / SVG timing keys mistaken for CSS */
+  "timeline",
+  "timelinephase",
+  "rangestart",
+  "rangeend",
+  "fill",
+  "playbackdirection",
+  "iterationstart",
+  "iterationcount",
+  "delay",
+  "enddelay",
+  "spacing",
+  "direction",
+  "playbackrate",
 ]);
 
 /** Remove Web Animations metadata — not real CSS properties. Keep in sync with server. */
@@ -28,7 +42,9 @@ export function filterAnimationPropertyKeys(properties: string[]): string[] {
   if (!properties?.length) return [];
   return properties.filter((p) => {
     if (typeof p !== "string" || !p.trim()) return false;
-    const norm = kebabCssProperty(p).replace(/-/g, "");
+    const raw = p.trim();
+    if (/^\d+$/.test(raw)) return false;
+    const norm = kebabCssProperty(raw).replace(/-/g, "");
     if (META_KEYS.has(norm)) return false;
     return true;
   });

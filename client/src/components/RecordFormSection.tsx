@@ -15,6 +15,7 @@ import {
   KeyRound,
   Monitor,
   Network,
+  RectangleHorizontal,
   Settings2,
   Smartphone,
   User,
@@ -88,13 +89,18 @@ type RecordFormSectionProps = {
     options?: RecordingStartOptions
   ) => void;
   onStop: () => void;
+  /** Pulse the Start button when idle and no report yet */
+  encourageStart?: boolean;
 };
+
+type BrowserLayoutOption = "desktop" | "portrait" | "mobileLandscape";
 
 function RecordFormSectionInner({
   isRecording,
   isProcessing,
   onStart,
   onStop,
+  encourageStart = false,
 }: RecordFormSectionProps) {
   const [url, setUrl] = useState(() => readStoredManualUrl());
   const [cpuThrottle, setCpuThrottle] = useState<CpuThrottle>(1);
@@ -131,11 +137,7 @@ function RecordFormSectionInner({
   const [assetBaselineUrlRegexFlags, setAssetBaselineUrlRegexFlags] =
     useState("i");
 
-  const [layoutMode, setLayoutMode] = useState<"landscape" | "portrait">(
-    "landscape"
-  );
-  const [portraitWidth, setPortraitWidth] = useState(390);
-  const [portraitHeight, setPortraitHeight] = useState(844);
+  const [layoutMode, setLayoutMode] = useState<BrowserLayoutOption>("desktop");
   const [advancedSessionOpen, setAdvancedSessionOpen] = useState(false);
 
   const selectedAutomationGame =
@@ -222,12 +224,6 @@ function RecordFormSectionInner({
         .map((s) => s.trim())
         .filter(Boolean),
       layoutMode,
-      ...(layoutMode === "portrait"
-        ? {
-            viewportWidth: portraitWidth,
-            viewportHeight: portraitHeight,
-          }
-        : {}),
     };
     if (scriptMode === "automation") {
       onStart(url, cpuThrottle, networkThrottle, {
@@ -270,8 +266,6 @@ function RecordFormSectionInner({
     casinoPass,
     skipLobby,
     layoutMode,
-    portraitWidth,
-    portraitHeight,
     assetBaselineUrlContains,
     assetBaselineUrlRegex,
     assetBaselineUrlRegexFlags,
@@ -381,103 +375,87 @@ function RecordFormSectionInner({
               Browser layout
             </p>
             <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap gap-3">
-            <label
-              className={`flex cursor-pointer items-center gap-2 rounded-xl border-2 px-4 py-3 text-sm transition ${
-                layoutMode === "landscape"
-                  ? "border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--fg)] ring-1 ring-[var(--accent)]/35"
-                  : "border-white/15 bg-white/[0.05] text-[var(--fg)] hover:border-[var(--accent)]/40"
-              } ${isRecording || isProcessing ? "pointer-events-none opacity-60" : ""}`}
-            >
-              <input
-                type="radio"
-                name="layout-mode"
-                className="sr-only"
-                checked={layoutMode === "landscape"}
-                onChange={() => setLayoutMode("landscape")}
-                disabled={isRecording || isProcessing}
-              />
-              <Monitor className="h-4 w-4 text-violet-400" aria-hidden />
-              Landscape
-              <span className="text-xs text-[var(--fg-muted)]">
-                — Chromium window maximized (full screen)
-              </span>
-            </label>
-            <label
-              className={`flex cursor-pointer items-center gap-2 rounded-xl border-2 px-4 py-3 text-sm transition ${
-                layoutMode === "portrait"
-                  ? "border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--fg)] ring-1 ring-[var(--accent)]/35"
-                  : "border-white/15 bg-white/[0.05] text-[var(--fg)] hover:border-[var(--accent)]/40"
-              } ${isRecording || isProcessing ? "pointer-events-none opacity-60" : ""}`}
-            >
-              <input
-                type="radio"
-                name="layout-mode"
-                className="sr-only"
-                checked={layoutMode === "portrait"}
-                onChange={() => setLayoutMode("portrait")}
-                disabled={isRecording || isProcessing}
-              />
-              <Smartphone className="h-4 w-4 text-violet-400" aria-hidden />
-              Portrait
-              <span className="text-xs text-[var(--fg-muted)]">
-                — fixed viewport &amp; window (mobile size)
-              </span>
-            </label>
-          </div>
-          {layoutMode === "portrait" && (
-            <div className="flex flex-wrap items-end gap-4 rounded-xl border border-[var(--border)] bg-[var(--bg)]/40 px-4 py-3">
-              <div className="flex flex-col gap-1.5">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <label
-                  htmlFor="viewport-w"
-                  className="text-xs font-medium text-[var(--fg-muted)]"
+                  className={`flex min-h-[120px] cursor-pointer flex-col gap-2 rounded-xl border-2 px-4 py-3 text-sm transition ${
+                    layoutMode === "desktop"
+                      ? "border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--fg)] ring-1 ring-[var(--accent)]/35"
+                      : "border-white/15 bg-white/[0.05] text-[var(--fg)] hover:border-[var(--accent)]/40"
+                  } ${isRecording || isProcessing ? "pointer-events-none opacity-60" : ""}`}
                 >
-                  Width (CSS px)
+                  <input
+                    type="radio"
+                    name="layout-mode"
+                    className="sr-only"
+                    checked={layoutMode === "desktop"}
+                    onChange={() => setLayoutMode("desktop")}
+                    disabled={isRecording || isProcessing}
+                  />
+                  <span className="flex items-center gap-2 font-semibold">
+                    <Monitor className="h-4 w-4 text-violet-400" aria-hidden />
+                    Desktop
+                  </span>
+                  <span className="text-xs leading-snug text-[var(--fg-muted)]">
+                    Chromium opens maximized — normal resizable desktop window and
+                    viewport controls (same as before).
+                  </span>
                 </label>
-                <input
-                  id="viewport-w"
-                  type="number"
-                  min={280}
-                  max={4096}
-                  value={portraitWidth}
-                  onChange={(e) =>
-                    setPortraitWidth(
-                      Math.max(280, Math.min(4096, Number(e.target.value) || 390))
-                    )
-                  }
-                  disabled={isRecording || isProcessing}
-                  className={`${NICE_SELECT_CLASS} w-28 font-mono text-[13px]`}
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
                 <label
-                  htmlFor="viewport-h"
-                  className="text-xs font-medium text-[var(--fg-muted)]"
+                  className={`flex min-h-[120px] cursor-pointer flex-col gap-2 rounded-xl border-2 px-4 py-3 text-sm transition ${
+                    layoutMode === "portrait"
+                      ? "border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--fg)] ring-1 ring-[var(--accent)]/35"
+                      : "border-white/15 bg-white/[0.05] text-[var(--fg)] hover:border-[var(--accent)]/40"
+                  } ${isRecording || isProcessing ? "pointer-events-none opacity-60" : ""}`}
                 >
-                  Height (CSS px)
+                  <input
+                    type="radio"
+                    name="layout-mode"
+                    className="sr-only"
+                    checked={layoutMode === "portrait"}
+                    onChange={() => setLayoutMode("portrait")}
+                    disabled={isRecording || isProcessing}
+                  />
+                  <span className="flex items-center gap-2 font-semibold">
+                    <Smartphone className="h-4 w-4 text-violet-400" aria-hidden />
+                    Portrait (mobile)
+                  </span>
+                  <span className="text-xs leading-snug text-[var(--fg-muted)]">
+                    Fixed{" "}
+                    <span className="font-mono text-[var(--fg)]">375×780</span>{" "}
+                    CSS px — window matches viewport; not resizable from PerfTrace
+                    launcher.
+                  </span>
                 </label>
-                <input
-                  id="viewport-h"
-                  type="number"
-                  min={400}
-                  max={4096}
-                  value={portraitHeight}
-                  onChange={(e) =>
-                    setPortraitHeight(
-                      Math.max(400, Math.min(4096, Number(e.target.value) || 844))
-                    )
-                  }
-                  disabled={isRecording || isProcessing}
-                  className={`${NICE_SELECT_CLASS} w-28 font-mono text-[13px]`}
-                />
+                <label
+                  className={`flex min-h-[120px] cursor-pointer flex-col gap-2 rounded-xl border-2 px-4 py-3 text-sm transition ${
+                    layoutMode === "mobileLandscape"
+                      ? "border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--fg)] ring-1 ring-[var(--accent)]/35"
+                      : "border-white/15 bg-white/[0.05] text-[var(--fg)] hover:border-[var(--accent)]/40"
+                  } ${isRecording || isProcessing ? "pointer-events-none opacity-60" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="layout-mode"
+                    className="sr-only"
+                    checked={layoutMode === "mobileLandscape"}
+                    onChange={() => setLayoutMode("mobileLandscape")}
+                    disabled={isRecording || isProcessing}
+                  />
+                  <span className="flex items-center gap-2 font-semibold">
+                    <RectangleHorizontal
+                      className="h-4 w-4 text-violet-400"
+                      aria-hidden
+                    />
+                    Landscape (mobile)
+                  </span>
+                  <span className="text-xs leading-snug text-[var(--fg-muted)]">
+                    Fixed{" "}
+                    <span className="font-mono text-[var(--fg)]">780×375</span>{" "}
+                    CSS px — same footprint rotated; window sized exactly, not
+                    resizable from launcher.
+                  </span>
+                </label>
               </div>
-              <p className="max-w-md text-xs leading-relaxed text-[var(--fg-muted)]">
-                Page viewport matches these dimensions; the browser window is opened
-                at the same size (no maximize). Resize is discouraged — metrics match
-                this fixed layout.
-              </p>
-            </div>
-          )}
             </div>
         {scriptMode === "automation" && (
           <div className="flex flex-col gap-6">
@@ -703,14 +681,8 @@ function RecordFormSectionInner({
           </div>
         )}
 
-        <div
-          className="relative pt-2"
-          aria-labelledby="capture-pipeline-heading"
-        >
-          <div
-            className="mb-6 flex items-center gap-4"
-            role="presentation"
-          >
+        <div className="relative pt-2" aria-labelledby="capture-pipeline-heading">
+          <div className="mb-6 flex items-center gap-4" role="presentation">
             <div className="h-px flex-1 bg-gradient-to-r from-transparent via-[var(--border)] to-[var(--border)]" />
             <h2
               id="capture-pipeline-heading"
@@ -727,7 +699,7 @@ function RecordFormSectionInner({
             </span>{" "}
             above for layout, asset keys, login, and optional preload URL match.
           </p>
-          <div className="rounded-2xl border border-[var(--accent)]/20 bg-[var(--bg-elevated)]/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
+          <div className="rounded-2xl border border-[color-mix(in_oklab,var(--accent)_28%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_4%,var(--bg-elevated))]/90 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] sm:p-5">
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
               <SelectField
                 label="Network"
@@ -825,6 +797,7 @@ function RecordFormSectionInner({
           isProcessing={isProcessing}
           onStart={handleStart}
           onStop={onStop}
+          pulseIdle={encourageStart}
           startLabel={
             scriptMode === "automation"
               ? "Start automated run"
