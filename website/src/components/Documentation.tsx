@@ -24,14 +24,18 @@ export function Documentation() {
           <p className="section-kicker">Operator guide</p>
           <h2 className="section-title">How to use PerfTrace</h2>
           <p className="section-desc">
-            Install the desktop app, open the Session view. Step 01 shows the full
-            session panel: URL, session mode, collapsed advanced options, capture
-            pipeline (network / CPU / trace), and session video — then Start.
+            Install the desktop app and open the Session view. Work through{" "}
+            <a href="#field-reference">every input below</a> first — URL, manual vs
+            automation, skip lobby, layout, credentials, asset keys, preload baseline,
+            and capture tuning — so you know exactly what each field does. Then Start,
+            and read the <a href="#session-report-ui">Session Report</a> when the run
+            finishes.
           </p>
         </div>
 
         <nav className="doc-toc" aria-label="Documentation sections">
-          <a href="#field-reference">Every field explained</a>
+          <a href="#field-reference">Session inputs — every field</a>
+          <a href="#session-report-ui">Session Report — results</a>
           <a href="#check-metrics">Reading metrics</a>
           <a href="#metric-reference">Metric reference</a>
           <a href="#whats-new">What&apos;s new</a>
@@ -84,45 +88,30 @@ export function Documentation() {
             />
           </motion.article>
 
-          <motion.article
-            className="doc-step"
-            initial={{ opacity: 0, y: 12 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-          >
-            <span className="doc-step-num">03</span>
-            <h3>Read the Session Report</h3>
-            <p>
-              Charts, assets, Web Vitals, and optional video align to{" "}
-              <strong>t = 0</strong> when a baseline is set (preload URL, asset
-              keys at game URL, or automation). Summary chips show requests,
-              latency, transfer, game vs common bytes. Use{" "}
-              <strong>Browse all files</strong> for every captured URL; tiles below
-              break down preload size until curtain lift, curtain lift time, and
-              assets by type.
-            </p>
-            <p className="doc-step-shot-label">Files, preload &amp; categories</p>
-            <DocFigure
-              src="/screens/guide-session-report-files-preload.png"
-              alt="PerfTrace Session Report: KPIs, Browse all files, preload size until curtain lift, curtain lift time, asset categories"
-            />
-            <p className="doc-step-shot-label">Report header &amp; sections</p>
-            <DocFigure
-              src="/screens/guide-session-report-overview.png"
-              alt="PerfTrace Session Report overview with summary pills, AVG FPS CPU heap DOM TBT cards, and collapsible sections for charts and video"
-            />
-          </motion.article>
+          <p className="doc-guide-after-steps">
+            Next: configure <a href="#field-url">URL</a>,{" "}
+            <a href="#field-session-mode">session mode</a>,{" "}
+            <a href="#field-automation">automation &amp; skip lobby</a>,{" "}
+            <a href="#field-preload-baseline">preload baseline</a>,{" "}
+            <a href="#field-asset-grouping">asset keys</a>, and{" "}
+            <a href="#field-capture-pipeline-detail">capture pipeline</a> in{" "}
+            <strong>Session inputs</strong> below. When the run completes, open{" "}
+            <a href="#session-report-ui">Session Report — results</a> for charts,
+            files, and video.
+          </p>
         </div>
       </section>
 
       {/* ——— Full field reference ——— */}
       <section className="section doc-section" id="field-reference">
         <div className="section-head">
-          <p className="section-kicker">UI reference</p>
+          <p className="section-kicker">Session inputs</p>
           <h2 className="section-title">Every field explained</h2>
           <p className="section-desc">
-            Labels match the PerfTrace app — each section includes a capture where it
-            helps.
+            Read this block before you rely on defaults: what to paste in the URL,
+            when to use automation vs manual, skip lobby, credentials, layout,
+            preload baseline, asset keys, throttling, trace detail, and video. Labels
+            match the desktop app — screenshots show where each control lives.
           </p>
         </div>
 
@@ -137,6 +126,7 @@ export function Documentation() {
           <a href="#field-capture-pipeline-detail">Capture pipeline</a>
           <a href="#field-live-status">Status &amp; live metrics</a>
           <a href="#field-report-files">Report: files &amp; preload</a>
+          <a href="#session-report-ui">Session Report (after capture)</a>
         </nav>
 
         <article className="field-doc" id="field-url">
@@ -502,16 +492,165 @@ export function Documentation() {
             loading phase before/around curtain lift — not the Session form&apos;s
             &quot;Preload baseline&quot; URL field (that only sets chart time zero).
           </p>
+          <p className="field-doc-note">
+            Deep dive with screenshots:{" "}
+            <a href="#report-overview">Report overview</a>,{" "}
+            <a href="#report-downloaded-files">Downloaded files</a>, and the rest of{" "}
+            <a href="#session-report-ui">Session Report — results</a>.
+          </p>
           <p className="field-ifomit">
             <strong>No game keys:</strong> Game vs common split is less meaningful;
             totals still show full session bytes.
           </p>
+        </article>
+      </section>
+
+      <section className="section doc-section" id="session-report-ui">
+        <div className="section-head">
+          <p className="section-kicker">Session Report</p>
+          <h2 className="section-title">Results — assets, charts &amp; recording</h2>
+          <p className="section-desc">
+            Use this section <strong>after</strong> you have configured session inputs
+            and finished a capture. Charts, assets, Web Vitals, and optional video align
+            to <strong>t = 0</strong> when a baseline is set (preload URL, asset keys at
+            game URL, or automation). Below: overview, then file modals, live charts,
+            animations, and WebM replay.
+          </p>
+        </div>
+
+        <nav className="doc-field-nav" aria-label="Session report screens index">
+          <a href="#report-overview">Report overview</a>
+          <a href="#report-downloaded-files">Downloaded files</a>
+          <a href="#report-files-list">File list modal</a>
+          <a href="#report-live-charts">Live metric charts</a>
+          <a href="#report-animations">Animations timeline</a>
+          <a href="#report-animation-detail">Animation details</a>
+          <a href="#report-session-video">Session recording</a>
+        </nav>
+
+        <article className="field-doc" id="report-overview">
+          <h3>Report overview — header, KPIs &amp; sections</h3>
+          <p>
+            Summary chips show requests, average latency, transfer, initial load,
+            full session, and game vs common bytes. KPI cards cover FPS, CPU, peak heap,
+            peak DOM, and TBT. Collapsible sections include files, live charts,
+            animations, detailed metrics, blocking time, and session recording.
+          </p>
+          <p className="doc-step-shot-label">Files, preload &amp; categories</p>
           <DocFigure
             src="/screens/guide-session-report-files-preload.png"
-            alt="PerfTrace Session Report files loaded Browse all files preload and asset breakdown"
+            alt="PerfTrace Session Report: KPIs, Browse all files, preload size until curtain lift, curtain lift time, asset categories"
+          />
+          <p className="doc-step-shot-label">Report header &amp; section list</p>
+          <DocFigure
+            src="/screens/guide-session-report-overview.png"
+            alt="PerfTrace Session Report overview with summary pills, AVG FPS CPU heap DOM TBT cards, and collapsible sections for charts and video"
+          />
+        </article>
+
+        <article className="field-doc" id="report-downloaded-files">
+          <h3>Downloaded files — preload, post-load, full session</h3>
+          <p>
+            <strong>Browse all files</strong> (from the report) opens the asset
+            lifecycle view. Summary cards split traffic by phase:{" "}
+            <strong>Preload</strong> (before curtain lift),{" "}
+            <strong>Post-load</strong> (after), and <strong>Full session</strong>{" "}
+            (everything captured). The purple <strong>Curtain lift</strong> badge
+            shows when the loading screen cleared — that moment defines preload vs
+            post-load.
+          </p>
+          <p>
+            Use <strong>Scope</strong> (All / Common / Game) with your{" "}
+            <a href="#field-asset-grouping">game asset keys</a>;{" "}
+            <strong>Type</strong> pills filter by document, script, stylesheet, API,
+            image, font, etc. <strong>Duplicate images</strong> flags repeated fetches.{" "}
+            <strong>Open file list</strong> opens the detailed table (next section)
+            using your current filters.
+          </p>
+          <DocFigure
+            src="/screens/report-downloaded-files-modal.png"
+            alt="PerfTrace Downloaded files modal: Preload Post-load Full session cards, curtain lift time, scope Common Game, type filters, duplicate images, Open file list"
+          />
+        </article>
+
+        <article className="field-doc" id="report-files-list">
+          <h3>Selected files — searchable list</h3>
+          <p>
+            The <strong>Selected files</strong> modal lists every URL in the current
+            browse selection. Search by URL, file name, or host; sort (e.g.{" "}
+            <strong>timeline</strong>); narrow with <strong>Filter type</strong> chips.
+            Columns include <strong>Type</strong>, <strong>File / endpoint</strong>,{" "}
+            <strong>Source</strong> (host), <strong>Phase</strong> (Preload vs
+            Post-load relative to curtain lift), and <strong>Size</strong>.
+          </p>
+          <DocFigure
+            src="/screens/report-selected-files-modal.png"
+            alt="PerfTrace Selected files modal: search sort timeline filter chips table Type File endpoint Source Phase Size"
+          />
+        </article>
+
+        <article className="field-doc" id="report-live-charts">
+          <h3>Live metric charts</h3>
+          <p>
+            The <strong>Live metric charts</strong> section plots FPS, CPU, JS heap,
+            DOM nodes, layout vs paint totals, and animation-related series on one
+            timeline. After a baseline is applied, the horizontal axis starts at{" "}
+            <strong>0&nbsp;s</strong> aligned with the trimmed trace — compare dips with
+            long tasks or animation rows. Use <strong>Detailed chart view</strong> for
+            the expanded graph when available.
+          </p>
+          <DocFigure
+            src="/screens/report-live-metric-charts.png"
+            alt="PerfTrace Live metric charts grid: FPS CPU JS heap DOM layout paint animation frames over session time"
+          />
+        </article>
+
+        <article className="field-doc" id="report-animations">
+          <h3>Animations &amp; properties — timeline</h3>
+          <p>
+            Each row is a CSS or Web Animation run on the session timeline (same 0
+            → end window as the charts). Pills filter by{" "}
+            <strong>Compositor</strong>, <strong>Paint</strong>,{" "}
+            <strong>Layout</strong>, or <strong>Other</strong> — layout-heavy animations are often worth
+            investigating first. <strong>How layers work</strong> opens in-app help.
+            Click a row to open the detail modal (next section).
+          </p>
+          <DocFigure
+            src="/screens/report-animations-timeline.png"
+            alt="PerfTrace Animations and properties timeline compositor paint layout filters bars over time"
+          />
+        </article>
+
+        <article className="field-doc" id="report-animation-detail">
+          <h3>Animation details modal</h3>
+          <p>
+            Shows the nearest <strong>FPS</strong> and <strong>CPU</strong> samples at
+            animation start (compare with the main charts), plus type, timeline,
+            animated properties, bottleneck hint (e.g. layout), and a{" "}
+            <strong>Serialized capture (JSON)</strong> slice for reporting.
+          </p>
+          <DocFigure
+            src="/screens/report-animation-details-modal.png"
+            alt="PerfTrace Animation details modal liftCurtain FPS CPU bottleneck Layout JSON capture"
+          />
+        </article>
+
+        <article className="field-doc" id="report-session-video">
+          <h3>Session recording &amp; Download video</h3>
+          <p>
+            When <a href="#field-session-video">Record session video</a> was on, the
+            report embeds a WebM player aligned to the trace window (subtitle shows
+            duration). <strong>Download video</strong> saves the file locally. Playback
+            supports keyboard shortcuts (play/pause, mute, fullscreen, PiP) as noted in
+            the UI — turn recording off for very long runs if capture feels heavy.
+          </p>
+          <DocFigure
+            src="/screens/report-session-recording.png"
+            alt="PerfTrace Session recording WebM player aligned to trace Download video controls"
           />
         </article>
       </section>
+
 
       <section className="section doc-section" id="check-metrics">
         <div className="section-head">
