@@ -418,40 +418,65 @@ function parseTraceToReport(
     Math.max(0, Math.min(wallClockDurationSec, t));
 
   /**
-   * Per-second merge of trace DrawFrame buckets and in-page rAF samples. In-page values win
-   * on the same second. Trace backfills when the buffer missed startup, or the page was
-   * throttled; client backfills when trace paint categories were light.
-   *
-   * When `forceSampleSeries` (game baseline / trimmed charts), in-page FPS is already rebased
-   * to t=0 at baseline; trace DrawFrame seconds still use the global trace timeline, so mixing
-   * them stretches the FPS series past the aligned CPU/heap window. Use client FPS only there.
+   * Merge trace DrawFrame with in-page FPS (client wins per chart-ms key).
+   * When `forceSampleSeries` (baseline / trimmed charts): **never** merge trace FPS — DrawFrame
+   * buckets use the trace clock, not session wall time after baseline trim; mixing caused empty
+   * leading gaps or wrong alignment. If client FPS is empty here, leave FPS sparse rather than
+   * injecting trace seconds that do not match CPU.
    */
-  const useTraceFpsInMerge = !(
-    forceSampleSeries && Array.isArray(fpsSamples) && fpsSamples.length > 0
-  );
+  const useTraceFpsInMerge = !forceSampleSeries;
   const tracePts = useTraceFpsInMerge
     ? traceFpsPoints.map((p) => ({
         timeSec: clampFpsSec(p.timeSec),
         value: Math.min(240, Math.max(0, p.value)),
       }))
     : [];
-  const clientPts = (fpsSamples || []).map((p) => ({
+  let clientPts = (fpsSamples || []).map((p) => ({
     timeSec: clampFpsSec(p.timeSec ?? 0),
     value: Math.min(240, Math.max(0, p.value ?? 0)),
   }));
-  const fpsBySec = new Map();
+  /**
+   * CPU rows (`samples`) are already rebased to t≈0 at baseline. If client FPS still starts later
+   * (legacy trim / mixed iframe clocks before session-relative merge), slide FPS to match when the
+   * CPU series is clearly anchored at the chart origin.
+   */
+  if (
+    forceSampleSeries &&
+    clientPts.length > 0 &&
+    Array.isArray(samples) &&
+    samples.length > 0
+  ) {
+    const fpsMin = Math.min(...clientPts.map((p) => p.timeSec ?? 0));
+    const cpuMin = Math.min(...samples.map((s) => s.timeSec ?? 0));
+    const gap = fpsMin - cpuMin;
+    if (cpuMin < 1 && gap > 0.05) {
+      clientPts = clientPts.map((p) => ({
+        ...p,
+        timeSec: Math.max(0, (p.timeSec ?? 0) - gap),
+      }));
+    }
+  }
+  const fpsByChartMs = new Map();
   for (const p of tracePts) {
-    const sec = Math.floor(p.timeSec + 1e-9);
-    if (!fpsBySec.has(sec)) fpsBySec.set(sec, p);
+    const ms = Math.round(Math.max(0, p.timeSec) * 1000);
+    if (!fpsByChartMs.has(ms)) {
+      fpsByChartMs.set(ms, {
+        timeSec: ms / 1000,
+        value: Math.min(240, Math.max(0, p.value)),
+      });
+    }
   }
   for (const p of clientPts) {
-    const sec = Math.floor(p.timeSec + 1e-9);
-    fpsBySec.set(sec, p);
+    const ms = Math.round(Math.max(0, p.timeSec) * 1000);
+    fpsByChartMs.set(ms, {
+      timeSec: ms / 1000,
+      value: Math.min(240, Math.max(0, p.value ?? 0)),
+    });
   }
   const fpsSeries = {
     label: "FPS",
     unit: "fps",
-    points: [...fpsBySec.entries()]
+    points: [...fpsByChartMs.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([, pt]) => pt),
   };

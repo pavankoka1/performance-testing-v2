@@ -420,10 +420,9 @@ function RecordFormSectionInner({
                     Portrait (mobile)
                   </span>
                   <span className="text-xs leading-snug text-[var(--fg-muted)]">
-                    Fixed{" "}
-                    <span className="font-mono text-[var(--fg)]">375×780</span>{" "}
-                    CSS px — window matches viewport; not resizable from PerfTrace
-                    launcher.
+                    <span className="font-mono text-[var(--fg)]">375×667</span>{" "}
+                    responsive preset — fixed CSS width × height like DevTools
+                    responsive mode (desktop Chrome, not a phone simulator).
                   </span>
                 </label>
                 <label
@@ -449,10 +448,9 @@ function RecordFormSectionInner({
                     Landscape (mobile)
                   </span>
                   <span className="text-xs leading-snug text-[var(--fg-muted)]">
-                    Fixed{" "}
-                    <span className="font-mono text-[var(--fg)]">780×375</span>{" "}
-                    CSS px — same footprint rotated; window sized exactly, not
-                    resizable from launcher.
+                    <span className="font-mono text-[var(--fg)]">667×375</span>{" "}
+                    responsive preset — fixed CSS width × height (desktop Chrome,
+                    not a phone simulator).
                   </span>
                 </label>
               </div>
@@ -595,9 +593,10 @@ function RecordFormSectionInner({
               Preload baseline (optional)
             </p>
             <p className="text-xs leading-relaxed text-[var(--fg-muted)]">
-              For SPAs: align charts and downloaded-bytes when the address bar
-              matches your game route. Leave empty to measure the full session from
-              load. Regex wins over “contains” if both are set.
+              If you want to capture game level assets, please enter your game
+              loader key or URL (e.g. dragontriger2, colorgame, sweetboananza2).
+              Leave empty to measure the full session from load. Regex wins over
+              “contains” if both are set.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
               <div className="flex min-w-0 flex-1 flex-col gap-1">

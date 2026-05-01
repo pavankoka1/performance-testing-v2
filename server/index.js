@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
+const fsp = require("fs/promises");
 const {
   createCaptureSession,
   stopCaptureSession,
@@ -15,6 +16,69 @@ const { CONTENT_SECURITY_POLICY } = require("../csp.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+/**
+ * HTML5 video (Chromium / Electron) usually requests byte ranges. Serving a naked stream
+ * without Accept-Ranges / Content-Length / 206 breaks in-app playback; downloading the full
+ * file still works because the whole resource is read at once.
+ */
+async function pipeVideoForPlayback(req, res, filePath, contentType) {
+  const stat = await fsp.stat(filePath);
+  const size = stat.size;
+  const rawRange = req.headers.range;
+  const range =
+    typeof rawRange === "string"
+      ? rawRange.trim().split(",")[0]?.trim() ?? ""
+      : "";
+
+  res.set("Content-Type", contentType);
+  res.set("Accept-Ranges", "bytes");
+  res.set("Cache-Control", "no-store");
+
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!match) {
+      res.status(416);
+      res.set("Content-Range", `bytes */${size}`);
+      res.end();
+      return;
+    }
+    let start = match[1] === "" ? 0 : parseInt(match[1], 10);
+    let end = match[2] === "" ? size - 1 : parseInt(match[2], 10);
+    if (Number.isNaN(start) || start < 0) start = 0;
+    if (Number.isNaN(end)) end = size - 1;
+    if (start >= size) {
+      res.status(416);
+      res.set("Content-Range", `bytes */${size}`);
+      res.end();
+      return;
+    }
+    end = Math.min(end, size - 1);
+    if (start > end) {
+      res.status(416);
+      res.set("Content-Range", `bytes */${size}`);
+      res.end();
+      return;
+    }
+    const chunkSize = end - start + 1;
+    res.status(206);
+    res.set("Content-Range", `bytes ${start}-${end}/${size}`);
+    res.set("Content-Length", String(chunkSize));
+    const rs = fs.createReadStream(filePath, { start, end });
+    rs.on("error", () => {
+      if (!res.writableEnded) res.destroy();
+    });
+    rs.pipe(res);
+    return;
+  }
+
+  res.set("Content-Length", String(size));
+  const rs = fs.createReadStream(filePath);
+  rs.on("error", () => {
+    if (!res.writableEnded) res.destroy();
+  });
+  rs.pipe(res);
+}
 
 app.use((req, res, next) => {
   res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
@@ -219,11 +283,11 @@ app.get("/api/metrics", async (req, res) => {
 app.get("/api/video", async (req, res) => {
   try {
     const videoData = await getLatestVideo();
-    res.set("Content-Type", videoData.contentType);
-    res.set("Cache-Control", "no-store");
-    fs.createReadStream(videoData.path).pipe(res);
+    await pipeVideoForPlayback(req, res, videoData.path, videoData.contentType);
   } catch {
-    return res.status(404).json({ error: "Video not available." });
+    if (!res.headersSent) {
+      return res.status(404).json({ error: "Video not available." });
+    }
   }
 });
 
@@ -231,8 +295,10 @@ app.get("/api/video", async (req, res) => {
 app.get("/api/video/download", async (req, res) => {
   try {
     const videoData = await getLatestVideo();
+    const stat = await fsp.stat(videoData.path);
     res.set("Content-Type", videoData.contentType);
     res.set("Cache-Control", "no-store");
+    res.set("Content-Length", String(stat.size));
     const ts = (() => {
       try {
         return new Date(videoData.startedAt).toISOString().slice(0, 19).replace(/[:-]/g, "");
@@ -244,7 +310,11 @@ app.get("/api/video/download", async (req, res) => {
       "Content-Disposition",
       `attachment; filename="perftrace-session-${ts}.webm"`
     );
-    fs.createReadStream(videoData.path).pipe(res);
+    const rs = fs.createReadStream(videoData.path);
+    rs.on("error", () => {
+      if (!res.writableEnded) res.destroy();
+    });
+    rs.pipe(res);
   } catch {
     return res.status(404).json({ error: "Video not available." });
   }

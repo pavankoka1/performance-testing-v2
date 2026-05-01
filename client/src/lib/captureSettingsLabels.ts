@@ -35,9 +35,9 @@ export function summarizeCaptureSettings(cs: CaptureSettings): string {
     `Trace ${cs.traceDetail}`,
     cs.recordVideo ? `Video ${cs.videoQuality}` : "Video off",
     cs.browserLayout.mode === "portrait"
-      ? `Mobile portrait ${cs.browserLayout.width}×${cs.browserLayout.height} (fixed)`
+      ? `Responsive portrait ${cs.browserLayout.width}×${cs.browserLayout.height}`
       : cs.browserLayout.mode === "mobileLandscape"
-        ? `Mobile landscape ${cs.browserLayout.width}×${cs.browserLayout.height} (fixed)`
+        ? `Responsive landscape ${cs.browserLayout.width}×${cs.browserLayout.height}`
         : cs.browserLayout.mode === "landscape"
           ? "Desktop (maximized)"
           : "Desktop (maximized)",

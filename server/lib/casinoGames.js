@@ -32,7 +32,7 @@ function buildSelectorConfig(selectorConfig = {}) {
     betSpot: envOrUnion(selectorConfig.betSpotEnvKey, selectorConfig.betSpot),
     timerBettingOpen: envOrUnion(
       selectorConfig.timerBettingOpenEnvKey,
-      selectorConfig.timerBettingOpen
+      selectorConfig.timerBettingOpen,
     ),
     waitForHidden: readOptionalEnv(selectorConfig.waitForHiddenEnvKey),
   };

@@ -173,11 +173,16 @@ export type PerfReport = {
   stoppedAt: string;
   durationMs: number;
   /**
-   * When a game baseline exists, rebased series (CPU, heap, DOM, etc.) span this wall-clock
-   * window only. FPS uses full-session `durationMs` on the time axis; use this for chart
-   * domains of rebased metrics so the line fills the plot (no fake gap after the game window).
+   * When a game baseline exists, rebased series (CPU, heap, DOM, FPS, etc.) share chart time
+   * t=0 at baseline and span this wall-clock window. Use with `durationMs` (full capture length).
    */
   alignedDurationMs?: number;
+  /** Strip `removedPrefixMs` from session start so charts/video start when the URL/game launched. */
+  fpsTimelineCrop?: {
+    sessionRecordingStartedMs: number;
+    baselineWallClockMs: number;
+    removedPrefixMs: number;
+  };
   /** Single-browser-session correlation id — one Chromium context per report */
   captureSessionId?: string | null;
   /** CPU / network / trace / layout options applied during recording */

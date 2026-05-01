@@ -18,6 +18,9 @@ const AUTH_URL =
 
 const GAME_NAME = "Color Game Bonanza";
 
+/** Align with server `casinoAutomation.js` — bonus/jackpot can extend round phases */
+const ROUND_PHASE_MS = 300000;
+
 /** Meta on macOS — Ctrl on Windows/Linux (matches PerfTrace casinoAutomation.js). */
 const NEW_TAB_MODIFIER =
   process.platform === "darwin" ? "Meta" : "Control";
@@ -135,12 +138,19 @@ async function runBettingRounds(gameFrame, numberOfRounds, config) {
 
     console.log("Bet placed");
 
-    await gameFrame.locator(config.timer).waitFor({ state: "hidden", timeout: 120000 }).catch(() => {});
-    await gameFrame.locator(config.result).waitFor({ state: "visible", timeout: 120000 });
+    await gameFrame
+      .locator(config.timer)
+      .waitFor({ state: "hidden", timeout: ROUND_PHASE_MS })
+      .catch(() => {});
+    await gameFrame
+      .locator(config.result)
+      .waitFor({ state: "visible", timeout: ROUND_PHASE_MS });
 
     console.log(`Round ${i} result displayed`);
 
-    await gameFrame.locator(config.result).waitFor({ state: "hidden", timeout: 120000 });
+    await gameFrame
+      .locator(config.result)
+      .waitFor({ state: "hidden", timeout: ROUND_PHASE_MS });
   }
 }
 
@@ -224,13 +234,13 @@ test.describe.configure({ mode: "serial" });
 
 const viewports = /** @type {const} */ ([
   { name: "Desktop", width: 1280, height: 800 },
-  { name: "Mobile Portrait", width: 375, height: 780 },
-  { name: "Mobile Landscape", width: 780, height: 375 },
+  { name: "Mobile Portrait", width: 375, height: 667 },
+  { name: "Mobile Landscape", width: 667, height: 375 },
 ]);
 
 for (const vp of viewports) {
   test(`Casino flow — ${vp.name} (${vp.width}×${vp.height})`, async ({ browser }) => {
-    test.setTimeout(180000);
+    test.setTimeout(1200000);
     await executeCasinoFlow(browser, { width: vp.width, height: vp.height });
   });
 }

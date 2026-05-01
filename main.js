@@ -65,10 +65,23 @@ const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 let mainWindow = null;
 
-/** Windows shell/load expects .ico; SVG often triggers opaque OS‑level path/load failures. */
+/**
+ * Dock / title-bar icon: use packaged raster or ICNS — never the tiny SVG favicon on macOS
+ * (SVG scales poorly and looked horizontally squeezed next to the real app bundle icon).
+ */
 function resolveWindowIconPath() {
-  const ico = path.join(__dirname, "assets", "app-icon.ico");
+  const assetsDir = path.join(__dirname, "assets");
+  const icns = path.join(assetsDir, "app-icon.icns");
+  const png = path.join(assetsDir, "app-icon.png");
+  const ico = path.join(assetsDir, "app-icon.ico");
+
+  if (process.platform === "darwin") {
+    if (fs.existsSync(icns)) return icns;
+    if (fs.existsSync(png)) return png;
+  }
   if (process.platform === "win32" && fs.existsSync(ico)) return ico;
+  if (fs.existsSync(png)) return png;
+  if (fs.existsSync(ico)) return ico;
   const svg = path.join(__dirname, "client", "public", "favicon.svg");
   if (fs.existsSync(svg)) return svg;
   return undefined;

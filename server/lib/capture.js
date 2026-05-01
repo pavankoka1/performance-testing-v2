@@ -3,10 +3,14 @@
  * Reuses logic from performance-testing-app playwrightUtils.
  */
 const { randomUUID } = require("crypto");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 const fs = require("fs/promises");
 const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
+
+const execFileAsync = promisify(execFile);
 const { chromium } = require("playwright");
 const {
   parseTraceToReport,
@@ -1065,30 +1069,66 @@ const VIEWPORT_HEIGHT = 768;
 const PORTRAIT_VIEWPORT_MIN_W = 280;
 const PORTRAIT_VIEWPORT_MIN_H = 400;
 const PORTRAIT_VIEWPORT_MAX = 4096;
-const DEFAULT_PORTRAIT_W = 390;
-const DEFAULT_PORTRAIT_H = 844;
+const DEFAULT_PORTRAIT_W = 375;
+const DEFAULT_PORTRAIT_H = 667;
+/** Fixed landscape phone — must stay wide ≥ tall. */
+const DEFAULT_MOBILE_LANDSCAPE_W = 667;
+const DEFAULT_MOBILE_LANDSCAPE_H = 375;
+
+function isFixedMobileBrowserLayout(layout) {
+  return (
+    layout?.mode === "portrait" || layout?.mode === "mobileLandscape"
+  );
+}
 
 function normalizeBrowserLayout(input) {
   const rawMode = input?.layoutMode ?? input?.mode;
-  const mode =
-    rawMode === "portrait" || rawMode === "Portrait" ? "portrait" : "landscape";
-  if (mode !== "portrait") return { mode: "landscape" };
-  let w = Number(input?.viewportWidth ?? input?.width);
-  let h = Number(input?.viewportHeight ?? input?.height);
-  if (!Number.isFinite(w)) w = DEFAULT_PORTRAIT_W;
-  if (!Number.isFinite(h)) h = DEFAULT_PORTRAIT_H;
-  w = Math.round(
-    Math.min(PORTRAIT_VIEWPORT_MAX, Math.max(PORTRAIT_VIEWPORT_MIN_W, w))
-  );
-  h = Math.round(
-    Math.min(PORTRAIT_VIEWPORT_MAX, Math.max(PORTRAIT_VIEWPORT_MIN_H, h))
-  );
-  if (w > h) {
-    const t = w;
-    w = h;
-    h = t;
+  const rm =
+    typeof rawMode === "string" ? rawMode.trim().toLowerCase() : "";
+
+  if (rm === "portrait" || rawMode === "Portrait") {
+    let w = Number(input?.viewportWidth ?? input?.width);
+    let h = Number(input?.viewportHeight ?? input?.height);
+    if (!Number.isFinite(w)) w = DEFAULT_PORTRAIT_W;
+    if (!Number.isFinite(h)) h = DEFAULT_PORTRAIT_H;
+    w = Math.round(
+      Math.min(PORTRAIT_VIEWPORT_MAX, Math.max(PORTRAIT_VIEWPORT_MIN_W, w))
+    );
+    h = Math.round(
+      Math.min(PORTRAIT_VIEWPORT_MAX, Math.max(PORTRAIT_VIEWPORT_MIN_H, h))
+    );
+    if (w > h) {
+      const t = w;
+      w = h;
+      h = t;
+    }
+    return { mode: "portrait", width: w, height: h };
   }
-  return { mode: "portrait", width: w, height: h };
+
+  if (rm === "mobilelandscape" || rm === "mobile_landscape") {
+    let w = Number(
+      input?.viewportWidth ?? input?.width ?? DEFAULT_MOBILE_LANDSCAPE_W
+    );
+    let h = Number(
+      input?.viewportHeight ?? input?.height ?? DEFAULT_MOBILE_LANDSCAPE_H
+    );
+    if (!Number.isFinite(w)) w = DEFAULT_MOBILE_LANDSCAPE_W;
+    if (!Number.isFinite(h)) h = DEFAULT_MOBILE_LANDSCAPE_H;
+    w = Math.round(
+      Math.min(PORTRAIT_VIEWPORT_MAX, Math.max(PORTRAIT_VIEWPORT_MIN_W, w))
+    );
+    h = Math.round(
+      Math.min(PORTRAIT_VIEWPORT_MAX, Math.max(PORTRAIT_VIEWPORT_MIN_H, h))
+    );
+    if (w < h) {
+      const t = w;
+      w = h;
+      h = t;
+    }
+    return { mode: "mobileLandscape", width: w, height: h };
+  }
+
+  return { mode: "landscape" };
 }
 
 let activeSession = null;
@@ -1125,7 +1165,7 @@ async function getLaunchOptions(browserLayout = { mode: "landscape" }) {
     try {
       const Chromium = (await import("@sparticuz/chromium")).default;
       const vp =
-        layout.mode === "portrait"
+        layout.mode === "portrait" || layout.mode === "mobileLandscape"
           ? { width: layout.width, height: layout.height }
           : { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT };
       return {
@@ -1153,20 +1193,9 @@ async function getLaunchOptions(browserLayout = { mode: "landscape" }) {
       ? ["--disable-gpu"]
       : [];
 
-  if (layout.mode === "portrait") {
-    const { width: pw, height: ph } = layout;
-    return {
-      headless,
-      ...(bundledChromeExe ? { executablePath: bundledChromeExe } : {}),
-      args: [
-        "--disable-dev-shm-usage",
-        `--window-size=${pw},${ph}`,
-        "--window-position=120,48",
-        ...macGpuFlags,
-      ],
-      defaultViewport: { width: pw, height: ph },
-    };
-  }
+  /** Maximized window for all modes; mobile presets keep a fixed Playwright viewport. */
+  const mobileFixed =
+    layout.mode === "portrait" || layout.mode === "mobileLandscape";
 
   return {
     headless,
@@ -1178,7 +1207,9 @@ async function getLaunchOptions(browserLayout = { mode: "landscape" }) {
       "--start-maximized",
       ...macGpuFlags,
     ],
-    defaultViewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+    defaultViewport: mobileFixed
+      ? { width: layout.width, height: layout.height }
+      : { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
   };
 }
 
@@ -1663,35 +1694,9 @@ async function maximizeBrowserWindow(cdpSession) {
   }
 }
 
-/** Portrait: fixed window size (no maximize). Best-effort CDP sync after launch. */
-async function setPortraitWindowBounds(cdpSession, width, height) {
-  if (!cdpSession || !width || !height) return;
-  try {
-    const { windowId } = await cdpSession.send("Browser.getWindowForTarget");
-    if (!windowId) return;
-    await cdpSession.send("Browser.setWindowBounds", {
-      windowId,
-      bounds: {
-        windowState: "normal",
-        left: 80,
-        top: 40,
-        width,
-        height,
-      },
-    });
-  } catch {
-    /* ignore */
-  }
-}
-
-async function applySessionWindowChromeLayout(cdpSession, browserLayout) {
+async function applySessionWindowChromeLayout(cdpSession) {
   if (!cdpSession) return;
-  const layout = normalizeBrowserLayout(browserLayout);
-  if (layout.mode === "portrait") {
-    await setPortraitWindowBounds(cdpSession, layout.width, layout.height);
-  } else {
-    await maximizeBrowserWindow(cdpSession);
-  }
+  await maximizeBrowserWindow(cdpSession);
 }
 
 /**
@@ -1720,10 +1725,19 @@ async function rebindCaptureSessionToPage(session, newPage) {
           try {
             await finalizeInPageFpsSamples(fr, { includePartial: false });
             const chunk =
-              (await fr.evaluate(
-                () => window.__perftrace?.samples ?? []
-              )) || [];
-            for (const s of chunk) {
+              (await fr.evaluate(() => {
+                const st = window.__perftrace;
+                if (!st) return { samples: [], t0: null };
+                return {
+                  samples: Array.isArray(st.samples) ? st.samples : [],
+                  t0:
+                    typeof st.t0 === "number" && Number.isFinite(st.t0)
+                      ? st.t0
+                      : null,
+                };
+              })) || { samples: [], t0: null };
+            const started = session.startedAt;
+            for (const s of chunk.samples) {
               if (
                 s &&
                 typeof s.timeSec === "number" &&
@@ -1731,7 +1745,14 @@ async function rebindCaptureSessionToPage(session, newPage) {
                 typeof s.value === "number" &&
                 Number.isFinite(s.value)
               ) {
-                session.fpsSamples.push({ timeSec: s.timeSec, value: s.value });
+                session.fpsSamples.push({
+                  timeSec: fpsBucketsToSessionRelativeSec(
+                    s.timeSec,
+                    chunk.t0,
+                    started
+                  ),
+                  value: s.value,
+                });
               }
             }
           } catch {
@@ -1753,10 +1774,7 @@ async function rebindCaptureSessionToPage(session, newPage) {
       cpuThrottle,
       networkThrottle: networkThrottle || "none",
     });
-    await applySessionWindowChromeLayout(
-      newMetrics,
-      session.browserLayout ?? { mode: "landscape" }
-    );
+    await applySessionWindowChromeLayout(newMetrics);
     session.metricsCdp = newMetrics;
     session.traceCdp = await context.newCDPSession(newPage);
     session.lastPerfTotals = undefined;
@@ -1925,6 +1943,45 @@ function normalizeAssetBaselineUrlMatcher(input) {
 }
 
 /**
+ * Manual runs: if the URL contains any `assetGameKeys` token (e.g. `colorgame`), treat it as the
+ * measured surface for t=0 — fixes mobile `/mobile/` paths when the UI baseline regex only
+ * matched `/desktop/` (charts looked “full session” on portrait).
+ */
+function buildAssetKeysBaselineMatcher(assetGameKeys) {
+  const keys = [
+    ...new Set(
+      (assetGameKeys || [])
+        .map((k) => String(k || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (keys.length === 0) return null;
+  return (url) => {
+    const lower = (url || "").toLowerCase();
+    if (
+      /\/authentication\/authenticate\.jsp|\/authenticate\.jsp/i.test(lower)
+    ) {
+      return false;
+    }
+    /** Still on the generic lobby grid — avoid pinning baseline before opening a game tile. */
+    if (/\/desktop\/lobby\/?(\?|$)/i.test(lower)) return false;
+    if (/\/mobile\/lobby\/?(\?|$)/i.test(lower)) return false;
+    return keys.some((k) => lower.includes(k.toLowerCase()));
+  };
+}
+
+/** User regex/contains first; otherwise URL matching asset keys (see above). */
+function makeEffectiveBaselineMatcher(userTest, assetGameKeys) {
+  const keysTest = buildAssetKeysBaselineMatcher(assetGameKeys);
+  return (url) => {
+    const u = url || "";
+    if (userTest && userTest(u)) return true;
+    if (keysTest && keysTest(u)) return true;
+    return false;
+  };
+}
+
+/**
  * When the session starts on casino auth and the user did not set a preload baseline,
  * start counting downloads when the URL first matches any assetGameKeys substring (regex).
  * Aligns manual auth→lobby→game runs with direct game URL reports.
@@ -1965,8 +2022,8 @@ function tryImplicitAssetBaselineFromAuthEntry(
 }
 
 /**
- * Charts and report duration use wall-clock t=0 at `timelineZeroMs` (first baseline commit).
- * Trim pre-baseline rows so series match session video (see `report.video.timelineOffsetSec`).
+ * CPU / heap / DOM / FPS rows: same clock as session start. Drop samples before URL launch, shift
+ * `timeSec` so chart t=0 = baseline (pairs with video trim when `timelineDeltaMs > 0`).
  */
 function rebaseSampleRows(samples, deltaMs) {
   if (!deltaMs || deltaMs <= 0 || !Array.isArray(samples)) return samples || [];
@@ -1974,6 +2031,24 @@ function rebaseSampleRows(samples, deltaMs) {
   return samples
     .filter((s) => (s.timeSec ?? 0) * 1000 >= deltaMs - 1e-3)
     .map((s) => ({ ...s, timeSec: Math.max(0, (s.timeSec ?? 0) - offSec) }));
+}
+
+/**
+ * `__perftrace` stores bucket index `n` relative to that frame's `t0`. When merging main + iframes,
+ * raw `n` values collide (iframe second 0 vs lobby second 0). Convert to seconds since session start.
+ */
+function fpsBucketsToSessionRelativeSec(bucketIndex, frameT0Ms, sessionStartedAtMs) {
+  const n = typeof bucketIndex === "number" && Number.isFinite(bucketIndex) ? bucketIndex : 0;
+  if (
+    typeof sessionStartedAtMs !== "number" ||
+    !Number.isFinite(sessionStartedAtMs) ||
+    typeof frameT0Ms !== "number" ||
+    !Number.isFinite(frameT0Ms)
+  ) {
+    return Math.max(0, n);
+  }
+  const wallMs = frameT0Ms + n * 1000 - sessionStartedAtMs;
+  return Math.max(0, wallMs / 1000);
 }
 
 /**
@@ -2053,8 +2128,19 @@ function rebaseLongTaskTimelinesForReport(report, deltaMs) {
 async function commitAssetBaseline(session, newPage) {
   if (!session || !newPage) return;
   try {
-    if (newPage.isClosed()) return;
+    if (newPage.isClosed()) {
+      if (session.automationEnabled && session.reportTimelineZeroMs == null) {
+        session.reportTimelineZeroMs = Date.now();
+        console.warn(
+          "[PerfTrace] commitAssetBaseline: page closed — set automation reportTimelineZeroMs only"
+        );
+      }
+      return;
+    }
   } catch {
+    if (session.automationEnabled && session.reportTimelineZeroMs == null) {
+      session.reportTimelineZeroMs = Date.now();
+    }
     return;
   }
   session.page = newPage;
@@ -2090,6 +2176,79 @@ async function commitAssetBaseline(session, newPage) {
       "[PerfTrace] Game page updated — curtain/preload baseline kept from first open:",
       session.recordedUrl || "(no url)"
     );
+  }
+}
+
+/**
+ * Manual sessions: commit `reportTimelineZeroMs` on the first navigation where the address bar
+ * matches the preload baseline (regex / contains / asset keys) — not on “first goto” alone.
+ *
+ * Casino automation (same as manual portrait): when **asset game keys** are set (e.g. `colorgame`),
+ * commit on URL transitions using only `buildAssetKeysBaselineMatcher` — it rejects auth + `/mobile/lobby`
+ * / `/desktop/lobby`, so we never pin t=0 too early. User regex/contains is **not** used for automation
+ * (those could match auth before the game).
+ *
+ * Hooks every tab so lobby → game trims charts/video from the game URL, including responsive viewports.
+ */
+function hookAssetBaselineOnNavigation(session, p) {
+  const automationKeysMatcher =
+    session?.automationEnabled &&
+    Array.isArray(session.assetGameKeys) &&
+    session.assetGameKeys.length > 0
+      ? buildAssetKeysBaselineMatcher(session.assetGameKeys)
+      : null;
+
+  if (session?.automationEnabled) {
+    if (!automationKeysMatcher) return;
+  } else if (!session?.effectiveBaselineUrlTest) {
+    return;
+  }
+
+  const maybeCommit = async () => {
+    if (!session || session._gameSurfaceBaselineCommitted) {
+      return;
+    }
+    try {
+      if (p && typeof p.isClosed === "function" && p.isClosed()) return;
+    } catch {
+      return;
+    }
+    let u = "";
+    try {
+      u = p.url();
+    } catch {
+      return;
+    }
+    try {
+      const urlTest = session.automationEnabled
+        ? automationKeysMatcher
+        : session.effectiveBaselineUrlTest;
+      if (urlTest && urlTest(u)) {
+        await commitAssetBaseline(session, p);
+      }
+    } catch (e) {
+      console.warn(
+        "[PerfTrace] Asset baseline (navigation):",
+        e?.message || e
+      );
+    }
+  };
+  try {
+    p.on("framenavigated", (frame) => {
+      try {
+        if (frame !== p.mainFrame()) return;
+      } catch {
+        return;
+      }
+      void maybeCommit();
+    });
+  } catch {
+    /* ignore */
+  }
+  try {
+    p.on("load", () => void maybeCommit());
+  } catch {
+    /* ignore */
   }
 }
 
@@ -2170,7 +2329,11 @@ async function collectMergedClientArtifacts(context, primaryPage, opts = {}) {
   }
   if (pages.length === 0 && primaryPage) pages.push(primaryPage);
 
-  const { assetGameKeys = [], recordedUrl = "" } = opts;
+  const {
+    assetGameKeys = [],
+    recordedUrl = "",
+    sessionStartedAt = undefined,
+  } = opts;
   const picked = pickArtifactSourcePage(pages, primaryPage, assetGameKeys, recordedUrl);
   let resourcePages = [picked ?? primaryPage ?? pages[0]].filter(Boolean);
   if (resourcePages.length === 0) resourcePages = pages;
@@ -2201,10 +2364,25 @@ async function collectMergedClientArtifacts(context, primaryPage, opts = {}) {
     for (const fr of frameList) {
       try {
         await finalizeInPageFpsSamples(fr);
-        const extra =
-          (await fr.evaluate(() => window.__perftrace?.samples ?? [])) || [];
-        for (const s of extra) {
-          pageFps.push({ ...s, _pageUrl: pageUrl });
+        const pack =
+          (await fr.evaluate(() => {
+            const st = window.__perftrace;
+            if (!st) return { samples: [], t0: null };
+            return {
+              samples: Array.isArray(st.samples) ? st.samples : [],
+              t0: typeof st.t0 === "number" && Number.isFinite(st.t0) ? st.t0 : null,
+            };
+          })) || { samples: [], t0: null };
+        for (const s of pack.samples) {
+          const rawIdx = typeof s.timeSec === "number" ? s.timeSec : 0;
+          const v =
+            typeof s.value === "number" && Number.isFinite(s.value) ? s.value : 0;
+          const timeSec = fpsBucketsToSessionRelativeSec(
+            rawIdx,
+            pack.t0,
+            sessionStartedAt
+          );
+          pageFps.push({ timeSec, value: v, _pageUrl: pageUrl });
         }
       } catch {
         /* cross-origin iframe or detached */
@@ -2374,11 +2552,32 @@ async function createCaptureSession(
   lastAutomationError = null;
 
   const safeUrl = ensureValidUrl(url);
+
+  let normalizedAssetGameKeys = Array.isArray(assetGameKeys)
+    ? assetGameKeys
+        .map((k) => String(k || "").trim())
+        .filter(Boolean)
+    : [];
+  if (automationOpts?.enabled && normalizedAssetGameKeys.length === 0) {
+    const { getAutomationGame } = require("./casinoGames");
+    const gid = String(
+      (automationOpts && automationOpts.gameId) || "color-game-bonanza"
+    );
+    const gameMeta = getAutomationGame(gid);
+    if (gameMeta?.assetGameKeys?.length) {
+      normalizedAssetGameKeys = [...gameMeta.assetGameKeys];
+      console.log(
+        "[PerfTrace] Automation: URL baseline keys from game registry:",
+        normalizedAssetGameKeys.join(", ")
+      );
+    }
+  }
+
   const implicitAssetBaseline =
     process.env.PERFTRACE_IMPLICIT_AUTH_BASELINE === "1"
       ? tryImplicitAssetBaselineFromAuthEntry(
           safeUrl,
-          assetGameKeys,
+          normalizedAssetGameKeys,
           assetBaselineInput,
           !!(automationOpts && automationOpts.enabled)
         )
@@ -2392,11 +2591,15 @@ async function createCaptureSession(
   const assetBaselineUrlTest =
     normalizeAssetBaselineUrlMatcher(assetBaselineInput) ||
     normalizeAssetBaselineUrlMatcher(implicitAssetBaseline);
+  const effectiveBaselineUrlTest = makeEffectiveBaselineMatcher(
+    assetBaselineUrlTest,
+    normalizedAssetGameKeys
+  );
   const browserLayout = normalizeBrowserLayout(browserLayoutInput || {});
   const launchOptions = await getLaunchOptions(browserLayout);
 
   function resolvePlaywrightViewport(headless, layout) {
-    if (layout.mode === "portrait") {
+    if (layout.mode === "portrait" || layout.mode === "mobileLandscape") {
       return { width: layout.width, height: layout.height };
     }
     if (headless) {
@@ -2416,7 +2619,7 @@ async function createCaptureSession(
 
   const browser = await chromium.launch(launchOptions);
   const videoSize =
-    browserLayout.mode === "portrait"
+    isFixedMobileBrowserLayout(browserLayout)
       ? { width: browserLayout.width, height: browserLayout.height }
       : videoQuality === "low"
         ? { width: 960, height: 540 }
@@ -2427,9 +2630,6 @@ async function createCaptureSession(
   );
   const context = await browser.newContext({
     viewport: ctxViewport,
-    ...(browserLayout.mode === "portrait"
-      ? { isMobile: true, hasTouch: true }
-      : {}),
     ...(recordVideo
       ? {
           recordVideo: {
@@ -2468,7 +2668,7 @@ async function createCaptureSession(
     cpuThrottle,
     networkThrottle: networkThrottlePreset,
   });
-  await applySessionWindowChromeLayout(metricsCdp, browserLayout);
+  await applySessionWindowChromeLayout(metricsCdp);
   /** Set after `activeSession` exists so liftCurtain can update curtain lift time. */
   const curtainLiftSessionRef = { current: null };
   const collectedAnimations = [];
@@ -2570,14 +2770,23 @@ async function createCaptureSession(
       }
       const activePage = activeSession?.page ?? page;
       /**
-       * URL baseline commits only for manual runs. Casino automation must not commit here —
-       * lobby/auth URLs can match implicit/user regex before the game; that pins t=0 too early
-       * and blocks anchoring at `markGamePageStart` (game from lobby).
+       * Poll URL for preload baseline (manual: regex/contains/keys). Automation: **keys only**
+       * via `buildAssetKeysBaselineMatcher` — excludes lobby/auth paths so t=0 tracks game URL like manual.
        */
+      const automationKeysBaselineTest =
+        sess?.automationEnabled &&
+        Array.isArray(sess.assetGameKeys) &&
+        sess.assetGameKeys.length > 0
+          ? buildAssetKeysBaselineMatcher(sess.assetGameKeys)
+          : null;
+      const pollBaselineTest =
+        !sess?.automationEnabled && sess?.effectiveBaselineUrlTest
+          ? sess.effectiveBaselineUrlTest
+          : automationKeysBaselineTest;
       if (
-        sess?.assetBaselineUrlTest &&
-        !sess._gameSurfaceBaselineCommitted &&
-        !sess.automationEnabled
+        pollBaselineTest &&
+        sess &&
+        !sess._gameSurfaceBaselineCommitted
       ) {
         let u = "";
         try {
@@ -2585,7 +2794,7 @@ async function createCaptureSession(
         } catch {
           u = "";
         }
-        if (sess.assetBaselineUrlTest(u)) {
+        if (pollBaselineTest(u)) {
           await commitAssetBaseline(sess, activePage);
         }
       }
@@ -2717,7 +2926,7 @@ async function createCaptureSession(
     traceCdp,
     metricsCdp,
     captureSessionId,
-    /** When true, skip URL-based baseline in the sampler so game open sets t=0 via automation only. */
+    /** When true, sampler/navigation baseline uses asset keys only (not manual regex). */
     automationEnabled,
     startedAt: recordingStartMs,
     recordedUrl: safeUrl,
@@ -2728,7 +2937,7 @@ async function createCaptureSession(
     cpuThrottle,
     networkThrottle: networkThrottlePreset,
     traceDetail,
-    assetGameKeys: Array.isArray(assetGameKeys) ? assetGameKeys : [],
+    assetGameKeys: normalizedAssetGameKeys,
     collectedAnimations,
     lastPerfTotals: undefined,
     trackedPages: new WeakSet(),
@@ -2745,6 +2954,7 @@ async function createCaptureSession(
     browserLayout,
     _foregroundBindPage: page,
     assetBaselineUrlTest,
+    effectiveBaselineUrlTest,
     assetBaselinePerfMs: undefined,
     recordVideo: recordVideo !== false,
     videoQuality: videoQuality === "low" ? "low" : "high",
@@ -2760,10 +2970,49 @@ async function createCaptureSession(
   };
 
   attachPopupTracking(activeSession, page);
+  hookAssetBaselineOnNavigation(activeSession, page);
+  if (!automationEnabled) {
+    try {
+      let u = "";
+      try {
+        u = page.url();
+      } catch {
+        u = "";
+      }
+      const hit =
+        typeof effectiveBaselineUrlTest === "function" &&
+        (effectiveBaselineUrlTest(u) || effectiveBaselineUrlTest(safeUrl));
+      if (hit) await commitAssetBaseline(activeSession, page);
+    } catch (e) {
+      console.warn("[PerfTrace] Immediate URL baseline:", e?.message || e);
+    }
+  } else if (normalizedAssetGameKeys.length > 0) {
+    try {
+      const keysTest = buildAssetKeysBaselineMatcher(normalizedAssetGameKeys);
+      let u = "";
+      try {
+        u = page.url();
+      } catch {
+        u = "";
+      }
+      if (
+        keysTest &&
+        (keysTest(u) || keysTest(safeUrl))
+      ) {
+        await commitAssetBaseline(activeSession, page);
+      }
+    } catch (e) {
+      console.warn(
+        "[PerfTrace] Immediate URL baseline (automation asset keys):",
+        e?.message || e
+      );
+    }
+  }
   void takePerfSample();
 
   context.on("page", (newPage) => {
     attachPopupTracking(activeSession, newPage);
+    hookAssetBaselineOnNavigation(activeSession, newPage);
     void ensureFpsCollector(newPage, {
       wallClockStartMs: activeSession?.startedAt ?? recordingStartMs,
     }).catch(() => {});
@@ -2835,6 +3084,63 @@ async function createCaptureSession(
   };
 }
 
+function resolveFfmpegExecutable() {
+  const env = process.env.FFMPEG_PATH;
+  if (env && fsSync.existsSync(env)) return env;
+  try {
+    const { registry } = require("playwright-core/lib/server");
+    const ex = registry.findExecutable("ffmpeg");
+    const p = ex?.executablePath?.();
+    if (p && fsSync.existsSync(p)) return p;
+  } catch {
+    /* ignore */
+  }
+  return "ffmpeg";
+}
+
+/**
+ * Physically trim the Playwright WebM so the first frame aligns with URL launch (same `timelineDeltaMs` as charts).
+ * Falls back to leaving the file untouched + client-side `timelineOffsetSec` if ffmpeg fails.
+ */
+async function trimSessionVideoFromUrlLaunch(inputPath, prefixMs) {
+  if (!inputPath || prefixMs < 50) return null;
+  const sec = prefixMs / 1000;
+  const ffmpegBin = resolveFfmpegExecutable();
+  const dir = path.dirname(inputPath);
+  const outPath = path.join(dir, `trim-${randomUUID()}.webm`);
+  try {
+    await execFileAsync(
+      ffmpegBin,
+      [
+        "-y",
+        "-ss",
+        String(sec),
+        "-i",
+        inputPath,
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        outPath,
+      ],
+      { maxBuffer: 10 * 1024 * 1024 }
+    );
+    const st = await fs.stat(outPath);
+    if (st.size < 512) {
+      await fs.unlink(outPath).catch(() => {});
+      return null;
+    }
+    return outPath;
+  } catch (e) {
+    console.warn(
+      "[PerfTrace] ffmpeg could not trim session video (full-length file kept):",
+      e?.message || e
+    );
+    await fs.unlink(outPath).catch(() => {});
+    return null;
+  }
+}
+
 async function stopCaptureSession(opts = {}) {
   const userRequested = !!opts.userRequested;
 
@@ -2902,6 +3208,7 @@ async function stopCaptureSession(opts = {}) {
     mergedArtifacts = await collectMergedClientArtifacts(context, page, {
       assetGameKeys,
       recordedUrl: recordedUrl ?? "",
+      sessionStartedAt: startedAt,
     });
   } catch (e) {
     console.warn("[PerfTrace] collectMergedClientArtifacts:", e?.message || e);
@@ -2927,19 +3234,25 @@ async function stopCaptureSession(opts = {}) {
     (r) => (r.endTimeMs ?? 0) >= assetCaptureStartTimeMs
   );
 
-  const timelineZeroMs = sessionReportTimelineZeroMs ?? startedAt;
+  /**
+   * t=0 wall clock: first `commitAssetBaseline` when the URL matched your baseline (regex /
+   * contains / asset keys), or automation game baseline — never “first goto” alone (that included
+   * lobby). If nothing matched, full session (same as recording start).
+   */
+  let timelineZeroMs = sessionReportTimelineZeroMs ?? startedAt;
+  /** Wall ms from session start → URL launch — stripped from charts + video (must match FPS `t0` clock). */
   const timelineDeltaMs = Math.max(0, timelineZeroMs - startedAt);
   let samplesForReport = samples;
-  /**
-   * When a game/baseline is set (automation or URL match), rebase FPS the same as CPU/heap so
-   * all live charts share one time origin and duration (lobby/redirect seconds omitted).
-   */
+  /** Session-long FPS (deduped), then rebase like CPU — same `timelineDeltaMs` / formula as CDP rows. */
   let fpsSamplesForReport = fpsSamplesDeduped;
   let networkRequestsForReport = filteredNetworkRequestsForAssets;
   let animForReport = collectedAnimations;
   if (timelineDeltaMs > 0) {
     samplesForReport = rebaseSampleRows(samples, timelineDeltaMs);
-    fpsSamplesForReport = rebaseSampleRows(fpsSamplesDeduped, timelineDeltaMs);
+    fpsSamplesForReport = rebaseSampleRows(
+      fpsSamplesDeduped,
+      timelineDeltaMs
+    );
     networkRequestsForReport = rebaseNetworkRequestsForReport(
       filteredNetworkRequestsForAssets,
       timelineDeltaMs
@@ -2993,6 +3306,7 @@ async function stopCaptureSession(opts = {}) {
       candidates.push({ path: fp, size: st.size });
     } catch {}
   }
+  let sessionVideoFileTrimmedToBaseline = false;
   if (candidates.length > 0) {
     candidates.sort((a, b) => b.size - a.size);
     lastVideo = {
@@ -3000,6 +3314,29 @@ async function stopCaptureSession(opts = {}) {
       startedAt,
       recordedUrl: recordedUrl ?? null,
     };
+  }
+
+  if (lastVideo?.path && timelineDeltaMs >= 50 && sessionRecordVideo) {
+    const trimmedPath = await trimSessionVideoFromUrlLaunch(
+      lastVideo.path,
+      timelineDeltaMs
+    );
+    if (trimmedPath) {
+      try {
+        await fs.unlink(lastVideo.path);
+      } catch {
+        /* ignore */
+      }
+      lastVideo = {
+        ...lastVideo,
+        path: trimmedPath,
+      };
+      sessionVideoFileTrimmedToBaseline = true;
+      console.log(
+        "[PerfTrace] Session video trimmed by %ss from session start → URL launch",
+        (timelineDeltaMs / 1000).toFixed(2)
+      );
+    }
   }
 
   const traceText = "";
@@ -3025,7 +3362,7 @@ async function stopCaptureSession(opts = {}) {
     report = await parseTraceToReport(
       null,
       traceTextForParser,
-      timelineZeroMs,
+      startedAt,
       stopRequestedAt,
       {
         samples: samplesForReport,
@@ -3056,13 +3393,21 @@ async function stopCaptureSession(opts = {}) {
     rebaseLongTaskTimelinesForReport(report, timelineDeltaMs);
   }
 
+  report.fpsTimelineCrop = {
+    sessionRecordingStartedMs: startedAt,
+    baselineWallClockMs: timelineZeroMs,
+    removedPrefixMs: timelineDeltaMs,
+  };
+
   const timelineOffsetSec =
     timelineDeltaMs > 0 ? timelineDeltaMs / 1000 : undefined;
   report.video = lastVideo
     ? {
         url: "/api/video",
         format: "webm",
-        ...(timelineOffsetSec != null && timelineOffsetSec > 0
+        ...(timelineOffsetSec != null &&
+        timelineOffsetSec > 0 &&
+        !sessionVideoFileTrimmedToBaseline
           ? { timelineOffsetSec }
           : {}),
       }
@@ -3095,7 +3440,13 @@ async function stopCaptureSession(opts = {}) {
             width: sessionBrowserLayout.width,
             height: sessionBrowserLayout.height,
           }
-        : { mode: "landscape" },
+        : sessionBrowserLayout?.mode === "mobileLandscape"
+          ? {
+              mode: "mobileLandscape",
+              width: sessionBrowserLayout.width,
+              height: sessionBrowserLayout.height,
+            }
+          : { mode: "landscape" },
     ...(sessionAutomation &&
     (sessionAutomation.gameId || sessionAutomation.enabled)
       ? {

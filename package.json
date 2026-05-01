@@ -21,6 +21,7 @@
     "electron:make:win-msi:incremental": "npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-wix --skip-package",
     "electron:make:linux": "npm run build && electron-forge make --platform linux --arch x64",
     "electron:make:linux-deb": "npm run build && rm -rf out && npx electron-forge make --platform linux --arch x64 --targets @electron-forge/maker-deb",
+    "icons:normalize": "node scripts/normalize-app-icon.mjs",
     "electron:make:all": "npm run build && rm -rf out && npx electron-forge make -p darwin -a universal && npx electron-forge make -p win32 -a x64 --targets @electron-forge/maker-zip && npx electron-forge make -p linux -a x64 --targets @electron-forge/maker-deb",
     "deploy:website": "cd website && node prepare-vercel-output.cjs && npx vercel deploy --prebuilt --prod",
     "deploy:website:perftrace": "cd website && node deploy-performance-testing-website.cjs",
@@ -47,7 +48,8 @@
     "@playwright/test": "^1.58.1",
     "concurrently": "^9.0.1",
     "electron": "^33.2.0",
-    "png-to-ico": "^3.0.1"
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5"
   },
   "engines": {
     "node": ">=18"

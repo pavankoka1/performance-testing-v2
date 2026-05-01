@@ -6,6 +6,9 @@
  */
 const { getAutomationGame } = require("./casinoGames");
 
+/** Bonus / jackpot rounds can stall timer → result for several minutes */
+const ROUND_PHASE_TIMEOUT_MS = 300000;
+
 /** Mirrors Performance_Automation/casinoBettingFlow.js TIMING for lobby search + game load. */
 const TIMING = {
   loginFormMaxWaitMs: 25000,
@@ -26,11 +29,14 @@ const TIMING = {
   searchResultsSettleMs: 500,
   gameTileTimeoutMs: 25000,
   canvasPollMs: 200,
-  betUiTimeoutMs: 120000,
+  /** Default Playwright timeout during betting + round waits (aligned with round phases). */
+  betUiTimeoutMs: ROUND_PHASE_TIMEOUT_MS,
   /** Post-game load settle before observe loop (chip wait in betting flow is ~400ms). */
   gameUiSettleMs: 3500,
   /** Between rounds only — last round skips this long wait */
-  resultHiddenBetweenRoundsMs: 180000,
+  resultHiddenBetweenRoundsMs: ROUND_PHASE_TIMEOUT_MS,
+  /** Timer hidden → result shown → result hidden; shared by betting + observe flows */
+  roundPhaseTimeoutMs: ROUND_PHASE_TIMEOUT_MS,
   /** After final result visible, brief settle then stop (no 3min hidden wait) */
   lastRoundSettleMs: 1500,
 };
@@ -60,6 +66,20 @@ function checkNotCancelled(session, signal) {
 
 function setPhase(session, phase) {
   if (session?.automation) session.automation.phase = phase;
+}
+
+/**
+ * `commitAssetBaseline` sets `reportTimelineZeroMs`; if it bails (e.g. `isClosed()` race on
+ * responsive viewports), charts stay anchored at session start and trace CPU spans the full run.
+ * Call after each `markGamePageStart` when the game URL/surface is the intended t=0.
+ */
+function ensureAutomationTimelineBaseline(session, contextLabel) {
+  if (!session?.automationEnabled) return;
+  if (session.reportTimelineZeroMs != null) return;
+  session.reportTimelineZeroMs = Date.now();
+  console.warn(
+    `[PerfTrace] Automation t=0 fallback (${contextLabel}): reportTimelineZeroMs was unset — using wall clock now (trim charts/video from here).`
+  );
 }
 
 /** Page has waitForTimeout; Frame does not — use owning Page for delays. */
@@ -104,7 +124,10 @@ async function waitTimerVisibleReturnRoot(page, config) {
   let lastErr;
   for (const root of roots) {
     try {
-      await root.locator(sel).first().waitFor({ state: "visible", timeout: 120000 });
+      await root.locator(sel).first().waitFor({
+        state: "visible",
+        timeout: TIMING.roundPhaseTimeoutMs,
+      });
       console.log(
         `[PerfTrace] Betting timer visible (${openSel ? "timerBettingOpen" : "timer"} root=${root === page.mainFrame() ? "main" : "child-frame"}).`
       );
@@ -129,6 +152,72 @@ function getOpenGamePage(session, fallbackPage) {
     /* ignore */
   }
   return fallbackPage;
+}
+
+/**
+ * Table UI (chip + bet spots) is inside the same iframe as the canvas; shell `page.locator`
+ * can resolve hidden/off-screen duplicates first so the real tile never gets clicked.
+ */
+async function resolveGameBettingRoot(page, timeoutMs = 25000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (page.isClosed()) break;
+    } catch {
+      break;
+    }
+    for (const frame of page.frames()) {
+      try {
+        const cv = frame.locator("canvas").first();
+        if ((await cv.count()) === 0) continue;
+        if (await cv.isVisible().catch(() => false)) {
+          console.log("[PerfTrace] Betting UI: game iframe (visible canvas).");
+          return frame;
+        }
+      } catch {
+        /* next frame */
+      }
+    }
+    await getTimeoutPage(page).waitForTimeout(200);
+  }
+  console.warn("[PerfTrace] No canvas iframe — betting uses full page (may miss tiles).");
+  return page;
+}
+
+async function ensureChipTrayOpen(root, chipSelector) {
+  if (!chipSelector || !String(chipSelector).trim()) return;
+  const chip = root.locator(chipSelector).first();
+  if (await chip.isVisible().catch(() => false)) return;
+  console.log("[PerfTrace] Opening chip tray…");
+  const tray = root
+    .locator(
+      '[data-testid*="chip-stack"], [data-testid*="ChipStack"], [data-testid*="chip-stack"]'
+    )
+    .first();
+  if (await tray.isVisible().catch(() => false)) {
+    await tray.click({ force: true }).catch(() => {});
+    await getTimeoutPage(root).waitForTimeout(900);
+  }
+}
+
+async function waitUntilAnyVisible(root, selector, timeoutMs, label) {
+  const sel = String(selector).trim();
+  if (!sel) return;
+  const loc = root.locator(sel);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let n = 0;
+    try {
+      n = await loc.count();
+    } catch {
+      n = 0;
+    }
+    for (let i = 0; i < n; i++) {
+      if (await loc.nth(i).isVisible().catch(() => false)) return;
+    }
+    await getTimeoutPage(root).waitForTimeout(120);
+  }
+  throw new Error(`[PerfTrace] ${label}: nothing visible within ${timeoutMs}ms`);
 }
 
 /**
@@ -208,7 +297,10 @@ async function waitResultVisibleReturnRoot(page, config) {
   let lastErr;
   for (const root of roots) {
     try {
-      await root.locator(sel).first().waitFor({ state: "visible", timeout: 120000 });
+      await root.locator(sel).first().waitFor({
+        state: "visible",
+        timeout: TIMING.roundPhaseTimeoutMs,
+      });
       return root;
     } catch (e) {
       lastErr = e;
@@ -645,13 +737,41 @@ async function openLobbyAndLaunchGame(
   );
 }
 
-/** Same as casinoBettingFlow.js `waitScrollClick`. */
+/**
+ * Same intent as casinoBettingFlow `waitScrollClick`, but:
+ * - `page` may be the game **Frame** (not only Page).
+ * - Clicks the first **visible** match for the selector union — `.first()` alone can be a hidden template.
+ */
 async function waitScrollClick(page, selector, label) {
   if (!selector || String(selector).trim() === "") {
     return;
   }
-  const loc = page.locator(selector).first();
-  await loc.waitFor({ state: "visible", timeout: TIMING.betUiTimeoutMs });
+  const sel = String(selector).trim();
+  const all = page.locator(sel);
+  const deadline = Date.now() + TIMING.betUiTimeoutMs;
+  let loc = null;
+  while (Date.now() < deadline) {
+    let n = 0;
+    try {
+      n = await all.count();
+    } catch {
+      n = 0;
+    }
+    for (let i = 0; i < n; i++) {
+      const cand = all.nth(i);
+      if (await cand.isVisible().catch(() => false)) {
+        loc = cand;
+        break;
+      }
+    }
+    if (loc) break;
+    await getTimeoutPage(page).waitForTimeout(100);
+  }
+  if (!loc) {
+    throw new Error(
+      `[PerfTrace] ${label}: no visible node for selector (check iframe / PP_CGB_* env)`
+    );
+  }
   await loc.scrollIntoViewIfNeeded();
   await getTimeoutPage(page).waitForTimeout(120);
   try {
@@ -662,6 +782,64 @@ async function waitScrollClick(page, selector, label) {
     );
     await loc.click({ force: true, timeout: 60000 });
   }
+}
+
+/**
+ * Full CSS union on `selector` — do not split on commas. Chip once, then every **visible** tile.
+ */
+async function waitScrollClickAll(page, selector, label) {
+  if (!selector || String(selector).trim() === "") return;
+  const sel = String(selector).trim();
+  const spots = page.locator(sel);
+  const deadline = Date.now() + TIMING.betUiTimeoutMs;
+  let sawVisible = false;
+  while (Date.now() < deadline && !sawVisible) {
+    let n = 0;
+    try {
+      n = await spots.count();
+    } catch {
+      n = 0;
+    }
+    for (let i = 0; i < n; i++) {
+      if (await spots.nth(i).isVisible().catch(() => false)) {
+        sawVisible = true;
+        break;
+      }
+    }
+    if (!sawVisible) await getTimeoutPage(page).waitForTimeout(100);
+  }
+  let count = 0;
+  try {
+    count = await spots.count();
+  } catch {
+    count = 0;
+  }
+  if (count === 0 || !sawVisible) {
+    console.warn(`[PerfTrace] ${label}: no visible bet tiles — PP_CGB_BET_SPOT / iframe`);
+    return;
+  }
+  if (count === 1) {
+    await waitScrollClick(page, sel, label);
+    return;
+  }
+  let clicked = 0;
+  for (let i = 0; i < count; i++) {
+    const tile = spots.nth(i);
+    if (!(await tile.isVisible().catch(() => false))) continue;
+    await tile.scrollIntoViewIfNeeded();
+    await getTimeoutPage(page).waitForTimeout(120);
+    try {
+      await tile.click({ timeout: TIMING.betUiTimeoutMs });
+      clicked += 1;
+    } catch (e) {
+      console.log(
+        `[PerfTrace] ${label} [${i + 1}/${count}]: ${e?.message || e} — force`
+      );
+      await tile.click({ force: true, timeout: 60000 });
+      clicked += 1;
+    }
+  }
+  console.log(`[PerfTrace] ${label}: placed on ${clicked} visible tile(s) of ${count} match(es)`);
 }
 
 /**
@@ -678,7 +856,7 @@ async function runBettingRounds(uiPage, numberOfRounds, config, session, signal)
   }
 
   console.log(
-    `[PerfTrace] Betting loop: ${totalRounds} round(s) — chip + bet spot (casinoBettingFlow); raw rounds=${String(numberOfRounds)}`
+    `[PerfTrace] Betting loop: ${totalRounds} round(s) — chip + all visible bet spots; raw rounds=${String(numberOfRounds)}`
   );
 
   let roundPage = getOpenGamePage(session, uiPage);
@@ -693,7 +871,7 @@ async function runBettingRounds(uiPage, numberOfRounds, config, session, signal)
       context,
       roundPage,
       config,
-      120000,
+      TIMING.roundPhaseTimeoutMs,
       session,
       signal
     );
@@ -703,27 +881,29 @@ async function runBettingRounds(uiPage, numberOfRounds, config, session, signal)
     }
 
     if (config.betSpot) {
-      await waitScrollClick(roundPage, config.chip, "chip");
-      await waitScrollClick(roundPage, config.betSpot, "bet spot");
-      console.log("[PerfTrace] Bet placed");
+      const bettingRoot = await resolveGameBettingRoot(roundPage, 15000);
+      await ensureChipTrayOpen(bettingRoot, config.chip);
+      await waitScrollClick(bettingRoot, config.chip, "chip");
+      await waitScrollClickAll(bettingRoot, config.betSpot, "bet spot");
+      console.log("[PerfTrace] Bet round chip + tiles done");
       await getTimeoutPage(roundPage).waitForTimeout(500);
     }
 
     await roundPage
       .locator(config.waitForHidden || config.timer)
       .first()
-      .waitFor({ state: "hidden", timeout: 120000 });
+      .waitFor({ state: "hidden", timeout: TIMING.roundPhaseTimeoutMs });
 
     await roundPage
       .locator(config.result)
       .first()
-      .waitFor({ state: "visible", timeout: 120000 });
+      .waitFor({ state: "visible", timeout: TIMING.roundPhaseTimeoutMs });
     console.log(`[PerfTrace] Round ${i} result shown`);
 
     await roundPage
       .locator(config.result)
       .first()
-      .waitFor({ state: "hidden", timeout: 180000 });
+      .waitFor({ state: "hidden", timeout: TIMING.roundPhaseTimeoutMs });
   }
 
   console.log(`[PerfTrace] Betting loop finished after ${totalRounds} round(s).`);
@@ -767,7 +947,7 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
         context,
         observePage,
         config,
-        120000,
+        TIMING.roundPhaseTimeoutMs,
         session,
         signal
       );
@@ -782,7 +962,7 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
         await root
           .locator(config.result)
           .first()
-          .waitFor({ state: "hidden", timeout: 90000 })
+          .waitFor({ state: "hidden", timeout: TIMING.roundPhaseTimeoutMs })
           .catch(() => {});
       }
     }
@@ -809,7 +989,7 @@ async function runObserveRounds(uiPage, numberOfRounds, config, session, signal)
       context,
       observePage,
       config,
-      120000,
+      TIMING.roundPhaseTimeoutMs,
       session,
       signal
     );
@@ -855,8 +1035,17 @@ async function runCasinoAutomation(session, opts) {
     checkNotCancelled(session, signal);
     await page.waitForLoadState("domcontentloaded").catch(() => {});
     await page.waitForLoadState("load", { timeout: 20000 }).catch(() => {});
+    /**
+     * Chart/video baseline must not wait for canvas/timer — that can be 50–60s after record
+     * start while the URL is already the game. Otherwise `reportTimelineZeroMs` lands late and
+     * FPS/CPU trim removes the whole early minute as “pre-baseline.”
+     */
+    if (typeof session.markGamePageStart === "function") {
+      await session.markGamePageStart(page);
+    }
+    ensureAutomationTimelineBaseline(session, "skipLobby after markGamePageStart");
     console.log(
-      "[PerfTrace] skipLobby: waiting for game UI (canvas or timer) on direct URL…"
+      "[PerfTrace] skipLobby: baseline at direct-URL load — waiting for game UI (canvas or timer)…"
     );
     gamePage = await waitForStableGamePage(
       context,
@@ -893,6 +1082,7 @@ async function runCasinoAutomation(session, opts) {
   if (typeof session.markGamePageStart === "function") {
     await session.markGamePageStart(gamePage);
   }
+  ensureAutomationTimelineBaseline(session, "gamePage ready (post lobby or skipLobby)");
   setPhase(session, "game");
 
   gamePage.setDefaultTimeout(TIMING.betUiTimeoutMs);
@@ -900,16 +1090,22 @@ async function runCasinoAutomation(session, opts) {
   await gamePage.waitForLoadState("domcontentloaded").catch(() => {});
 
   if (automationMode === "betting") {
+    const bettingRoot = await resolveGameBettingRoot(gamePage, 30000);
+    await ensureChipTrayOpen(bettingRoot, bettingConfig.chip);
     if (bettingConfig.chip && String(bettingConfig.chip).trim()) {
-      await gamePage
-        .locator(bettingConfig.chip)
-        .first()
-        .waitFor({ state: "visible", timeout: TIMING.betUiTimeoutMs });
+      await waitUntilAnyVisible(
+        bettingRoot,
+        bettingConfig.chip,
+        TIMING.betUiTimeoutMs,
+        "chip readiness"
+      );
     }
-    await gamePage
-      .locator(bettingConfig.betSpot)
-      .first()
-      .waitFor({ state: "visible", timeout: TIMING.betUiTimeoutMs });
+    await waitUntilAnyVisible(
+      bettingRoot,
+      bettingConfig.betSpot,
+      TIMING.betUiTimeoutMs,
+      "bet spot readiness"
+    );
     await getTimeoutPage(gamePage).waitForTimeout(400);
   } else {
     await getTimeoutPage(gamePage).waitForTimeout(TIMING.gameUiSettleMs);
