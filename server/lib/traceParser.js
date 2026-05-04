@@ -209,6 +209,23 @@ async function readTraceFromZip(tracePath) {
   });
 }
 
+function omitSyntheticMarker(row) {
+  if (!row || row._synthetic !== true) return row;
+  const { _synthetic, ...rest } = row;
+  return rest;
+}
+
+/**
+ * Strip `_synthetic` markers for chart/export. Do **not** subtract a time origin from `timeSec`:
+ * CDP rows use wall `(Date.now() - recordingStartMs) / 1000`; shifting by the first real sample
+ * compresses e.g. wall 30–65s onto 0–35s while charts keep domain `[0, sessionDurationSec]`, erasing
+ * the tail. Synthetic rows already occupy missing wall seconds when a poll threw.
+ */
+function normalizeSessionSampleTimeline(samples) {
+  if (!Array.isArray(samples) || samples.length === 0) return samples;
+  return samples.map(omitSyntheticMarker);
+}
+
 function parseTraceToReport(
   tracePath,
   traceText,
@@ -218,8 +235,28 @@ function parseTraceToReport(
 ) {
   const tracePayload = traceText || "";
   const events = tracePayload ? parseTraceEvents(tracePayload) : [];
-  const { samples, fpsSamples, networkRequests } = fallback;
+  const { samples: rawSamples, fpsSamples, networkRequests } = fallback;
+  /** CDP 1 Hz rows from `Performance.getMetrics` (same array as committed `samples`). */
+  const sessionSamples = Array.isArray(rawSamples) ? rawSamples : [];
   const forceSampleSeries = fallback?.forceSampleSeries === true;
+  /**
+   * **Manual session, no preload URL fields** (`simpleCdtSampling`): prefer CDP `getMetrics` rows for
+   * CPU / heap / DOM chart lines (fixes flat or misaligned CDT vs trace). FPS uses the same merge as
+   * all other modes — see committed `useTraceFpsInMerge` below.
+   */
+  const simpleCdtSampling = fallback?.simpleCdtSampling === true;
+  /**
+   * For CPU / heap / DOM **lines**, Chrome trace timestamps often drift from session wall time (can look
+   * like “nothing for the first 30s”). Whenever we have poll samples and we are not baseline-trimmed,
+   * always chart those — trace stays available for totals, long tasks, layout sums, etc.
+   */
+  const preferCdpTimeSeries =
+    simpleCdtSampling && !forceSampleSeries && sessionSamples.length > 0;
+  /** Strip `_synthetic` flags; wall-clock `timeSec` unchanged (same axis as FPS / session duration). */
+  const chartSessionSamples =
+    simpleCdtSampling && !forceSampleSeries && sessionSamples.length > 0
+      ? normalizeSessionSampleTimeline(sessionSamples)
+      : sessionSamples;
   /** Wall time when recording began (may differ from trace timeline anchor after game baseline). */
   const sessionRecordingStartMs =
     fallback?.sessionRecordingStartedAt != null
@@ -409,28 +446,53 @@ function parseTraceToReport(
     return { label, unit, points };
   };
 
-  const totalScript = scriptMs || samples.reduce((s, x) => s + x.scriptMs, 0);
-  const totalLayout = layoutMs || samples.reduce((s, x) => s + x.layoutMs, 0);
+  const totalScript =
+    scriptMs || sessionSamples.reduce((s, x) => s + x.scriptMs, 0);
+  const totalLayout =
+    layoutMs || sessionSamples.reduce((s, x) => s + x.layoutMs, 0);
 
   const traceFpsPoints = mapToSeries(fpsMap, "FPS", "fps").points;
 
+  /** Baseline-aligned chart span (automation / preload trim); FPS must stay within this window. */
+  const alignedChartDurationSec =
+    fallback?.alignedChartDurationSec != null &&
+    Number.isFinite(fallback.alignedChartDurationSec) &&
+    fallback.alignedChartDurationSec > 0
+      ? Math.max(0, fallback.alignedChartDurationSec)
+      : 0;
+  const fpsClampMaxSec =
+    forceSampleSeries && alignedChartDurationSec > 0
+      ? Math.min(wallClockDurationSec, alignedChartDurationSec)
+      : wallClockDurationSec;
   const clampFpsSec = (t) =>
-    Math.max(0, Math.min(wallClockDurationSec, t));
+    Math.max(0, Math.min(fpsClampMaxSec, t));
 
   /**
-   * Merge trace DrawFrame with in-page FPS (client wins per chart-ms key).
-   * When `forceSampleSeries` (baseline / trimmed charts): **never** merge trace FPS — DrawFrame
-   * buckets use the trace clock, not session wall time after baseline trim; mixing caused empty
-   * leading gaps or wrong alignment. If client FPS is empty here, leave FPS sparse rather than
-   * injecting trace seconds that do not match CPU.
+   * Trace DrawFrame buckets are seconds since first DrawFrame; `__perftrace` FPS uses session wall
+   * (and rebased seconds when `forceSampleSeries`). Shift trace by (first DrawFrame − trace origin),
+   * and subtract `timelineBaselineTrimSec` when capture passed lobby trim so trace and client FPS
+   * share the same chart time. Seed the merge map from trace, then **client overwrites** the same
+   * ms bucket — sparse in-page FPS alone often leaves most of long **automation** runs empty; legacy
+   * “no trace when trimmed” caused short FPS lines (e.g. ~26s of 90s wall).
    */
-  const useTraceFpsInMerge = !forceSampleSeries;
-  const tracePts = useTraceFpsInMerge
-    ? traceFpsPoints.map((p) => ({
-        timeSec: clampFpsSec(p.timeSec),
-        value: Math.min(240, Math.max(0, p.value)),
-      }))
-    : [];
+  const traceWallOffsetSec =
+    Number.isFinite(drawFrameMinTs) &&
+    Number.isFinite(startTs) &&
+    drawFrameMinTs >= startTs
+      ? (drawFrameMinTs - startTs) / traceTsToSec
+      : 0;
+  const timelineBaselineTrimSec =
+    fallback?.timelineBaselineTrimSec != null &&
+    Number.isFinite(fallback.timelineBaselineTrimSec)
+      ? Math.max(0, fallback.timelineBaselineTrimSec)
+      : 0;
+
+  const tracePts = traceFpsPoints.map((p) => ({
+    timeSec: clampFpsSec(
+      (p.timeSec ?? 0) + traceWallOffsetSec - timelineBaselineTrimSec
+    ),
+    value: Math.min(240, Math.max(0, p.value)),
+  }));
   let clientPts = (fpsSamples || []).map((p) => ({
     timeSec: clampFpsSec(p.timeSec ?? 0),
     value: Math.min(240, Math.max(0, p.value ?? 0)),
@@ -443,11 +505,10 @@ function parseTraceToReport(
   if (
     forceSampleSeries &&
     clientPts.length > 0 &&
-    Array.isArray(samples) &&
-    samples.length > 0
+    sessionSamples.length > 0
   ) {
     const fpsMin = Math.min(...clientPts.map((p) => p.timeSec ?? 0));
-    const cpuMin = Math.min(...samples.map((s) => s.timeSec ?? 0));
+    const cpuMin = Math.min(...sessionSamples.map((s) => s.timeSec ?? 0));
     const gap = fpsMin - cpuMin;
     if (cpuMin < 1 && gap > 0.05) {
       clientPts = clientPts.map((p) => ({
@@ -473,12 +534,39 @@ function parseTraceToReport(
       value: Math.min(240, Math.max(0, p.value ?? 0)),
     });
   }
+  let fpsPointsSorted = [...fpsByChartMs.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, pt]) => pt);
+
+  /**
+   * Baseline-trimmed sessions: merged FPS is often **sparse** (only seconds that had a DrawFrame
+   * or rAF flush). Recharts connects consecutive points in sort order — a gap from e.g. 8s → 25s
+   * leaves most of the aligned X-axis visually empty. Emit one sample per wall second in the
+   * aligned window, forward-filling from the last known value (same second resolution as capture).
+   */
+  if (forceSampleSeries && alignedChartDurationSec > 0 && fpsPointsSorted.length > 0) {
+    const maxSec = Math.ceil(alignedChartDurationSec);
+    const bySec = new Map();
+    for (const p of fpsPointsSorted) {
+      const sec = Math.min(
+        Math.max(0, Math.floor((p.timeSec ?? 0) + 1e-9)),
+        maxSec - 1
+      );
+      bySec.set(sec, p.value);
+    }
+    const dense = [];
+    let lastV = 0;
+    for (let s = 0; s < maxSec; s++) {
+      if (bySec.has(s)) lastV = bySec.get(s);
+      dense.push({ timeSec: s, value: lastV });
+    }
+    fpsPointsSorted = dense;
+  }
+
   const fpsSeries = {
     label: "FPS",
     unit: "fps",
-    points: [...fpsByChartMs.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, pt]) => pt),
+    points: fpsPointsSorted,
   };
 
   // CPU: convert to percentage (0-100). Trace buckets are per-second; CDP samples now 1s interval.
@@ -487,22 +575,41 @@ function parseTraceToReport(
     Math.min(100, Math.max(0, (ms / SAMPLE_WINDOW_MS) * 100));
 
   const cpuPoints = mapToSeries(cpuBusyMap, "CPU", "%").points;
+  /** Committed parser used `> 2`; simple-CDT path allows `>= 2` for sparse traces. */
+  const traceCpuBucketOk = simpleCdtSampling
+    ? cpuBusyMap.size >= 2
+    : cpuBusyMap.size > 2;
   const useTraceCpu =
-    !forceSampleSeries && cpuBusyMap.size > 2 && cpuPoints.length >= 2;
-  const cpuSeries = useTraceCpu
+    !preferCdpTimeSeries &&
+    !forceSampleSeries &&
+    traceCpuBucketOk &&
+    cpuPoints.length >= 2;
+  const cpuSeries = preferCdpTimeSeries
     ? {
         label: "CPU",
         unit: "%",
-        points: cpuPoints.map((p) => ({ ...p, value: toCpuPercent(p.value) })),
-      }
-    : {
-        label: "CPU",
-        unit: "%",
-        points: samples.map((s) => ({
+        points: chartSessionSamples.map((s) => ({
           timeSec: s.timeSec,
           value: toCpuPercent(s.cpuBusyMs),
         })),
-      };
+      }
+    : useTraceCpu
+      ? {
+          label: "CPU",
+          unit: "%",
+          points: cpuPoints.map((p) => ({
+            ...p,
+            value: toCpuPercent(p.value),
+          })),
+        }
+      : {
+          label: "CPU",
+          unit: "%",
+          points: chartSessionSamples.map((s) => ({
+            timeSec: s.timeSec,
+            value: toCpuPercent(s.cpuBusyMs),
+          })),
+        };
 
   /** GPU utilisation is not computed reliably from our trace — omit chart (empty series). */
   const gpuSeries = {
@@ -511,32 +618,56 @@ function parseTraceToReport(
     points: [],
   };
 
-  const memorySeries =
-    !forceSampleSeries && memoryPoints.length > 0
+  const useTraceMemory =
+    !preferCdpTimeSeries &&
+    !forceSampleSeries &&
+    memoryPoints.length > 0;
+
+  const memorySeries = preferCdpTimeSeries
+    ? {
+        label: "JS Heap",
+        unit: "MB",
+        points: chartSessionSamples
+          .filter((s) => typeof s.jsHeapMb === "number")
+          .map((s) => ({ timeSec: s.timeSec, value: s.jsHeapMb })),
+      }
+    : useTraceMemory
       ? { label: "JS Heap", unit: "MB", points: memoryPoints }
       : {
           label: "JS Heap",
           unit: "MB",
-          points: samples
+          points: chartSessionSamples
             .filter((s) => typeof s.jsHeapMb === "number")
             .map((s) => ({ timeSec: s.timeSec, value: s.jsHeapMb })),
         };
 
-  const domSeries =
-    !forceSampleSeries && domPoints.length > 0
+  const useTraceDom =
+    !preferCdpTimeSeries &&
+    !forceSampleSeries &&
+    domPoints.length > 0;
+
+  const domSeries = preferCdpTimeSeries
+    ? {
+        label: "DOM Nodes",
+        unit: "count",
+        points: chartSessionSamples
+          .filter((s) => typeof s.nodes === "number")
+          .map((s) => ({ timeSec: s.timeSec, value: s.nodes })),
+      }
+    : useTraceDom
       ? { label: "DOM Nodes", unit: "count", points: domPoints }
       : {
           label: "DOM Nodes",
           unit: "count",
-          points: samples
+          points: chartSessionSamples
             .filter((s) => typeof s.nodes === "number")
             .map((s) => ({ timeSec: s.timeSec, value: s.nodes })),
         };
 
   const sampleLayoutSum =
-    fallback.samples?.reduce((s, x) => s + (x.layoutMs ?? 0), 0) ?? 0;
+    sessionSamples.reduce((s, x) => s + (x.layoutMs ?? 0), 0) ?? 0;
   const samplePaintSum =
-    fallback.samples?.reduce((s, x) => s + (x.paintMs ?? 0), 0) ?? 0;
+    sessionSamples.reduce((s, x) => s + (x.paintMs ?? 0), 0) ?? 0;
   if (sampleLayoutSum > layoutTimeMs) layoutTimeMs = sampleLayoutSum;
   if (samplePaintSum > paintTimeMs) paintTimeMs = samplePaintSum;
 

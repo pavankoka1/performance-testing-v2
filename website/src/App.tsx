@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Documentation } from "./components/Documentation";
+// import { Documentation } from "./components/Documentation";
 import { EyeWidget } from "./components/EyeWidget";
 import { ShaderCanvas } from "./components/ShaderCanvas";
 
@@ -142,14 +142,8 @@ export default function App() {
             <a href="#metrics">Coverage</a>
             <a href="#features">Product</a>
             <a href="#flow">Flow</a>
-            <a href="#guide">Guide</a>
-            <a href="#field-reference">Fields</a>
-            <a href="#metric-reference">Glossary</a>
             <a href="#download">Download</a>
           </nav>
-          <span className="nav-doc-mini">
-            <a href="#guide">Guide</a>
-          </span>
           <a className="nav-cta" href="#download">
             Get the app
           </a>
@@ -285,7 +279,7 @@ export default function App() {
           </div>
         </section>
 
-        <Documentation />
+        {/* <Documentation /> — how-to + field reference (includes UI screenshots); hidden from public site */}
 
         <section className="section">
           <div className="section-head">
@@ -354,12 +348,7 @@ export default function App() {
             <strong>PerfTrace</strong> · Self-hosted · No mandatory cloud · Your
             sessions stay on your hardware (or your VPS).
           </p>
-          <nav className="footer-doc-links" aria-label="Documentation shortcuts">
-            <a href="#guide">How to use</a>
-            <a href="#field-reference">Every field</a>
-            <a href="#check-metrics">Reading metrics</a>
-            <a href="#metric-reference">Metric reference</a>
-            <a href="#whats-new">What&apos;s new</a>
+          <nav className="footer-doc-links" aria-label="Page shortcuts">
             <a href="#download">Download</a>
           </nav>
           <p style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>

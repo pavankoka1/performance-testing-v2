@@ -9,9 +9,14 @@ const fs = require("fs/promises");
 const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
+const { createRequire } = require("module");
 
 const execFileAsync = promisify(execFile);
-const { chromium } = require("playwright");
+/** Resolve playwright from app root (…/package.json), not cwd — avoids "Cannot find module 'playwright'" after chdir. */
+const appPkgJson = path.join(__dirname, "..", "..", "package.json");
+const { chromium } = (
+  fsSync.existsSync(appPkgJson) ? createRequire(appPkgJson) : require
+)("playwright");
 const {
   parseTraceToReport,
   computeClsFromEntries,
@@ -1137,6 +1142,15 @@ let reportGenerationInProgress = false;
 let cachedSessionReport = null;
 let lastAutomationError = null;
 
+/**
+ * Windows: normalize separators only (no path.resolve / realpath). With main process cwd set to
+ * the app content root, callers should prefer app-relative joins where possible.
+ */
+function normalizeLocalExecutablePathForWin32(p) {
+  if (!p || typeof p !== "string" || process.platform !== "win32") return p;
+  return path.normalize(p);
+}
+
 function ensureValidUrl(value) {
   let parsed;
   try {
@@ -1156,7 +1170,10 @@ async function getLaunchOptions(browserLayout = { mode: "landscape" }) {
   let bundledChromeExe;
   try {
     const p = chromium.executablePath();
-    if (p && fsSync.existsSync(p)) bundledChromeExe = p;
+    if (p && fsSync.existsSync(p)) {
+      const normalized = normalizeLocalExecutablePathForWin32(p);
+      bundledChromeExe = fsSync.existsSync(normalized) ? normalized : p;
+    }
   } catch {
     /* playwright resolves after env set */
   }
@@ -1940,6 +1957,24 @@ function normalizeAssetBaselineUrlMatcher(input) {
     return (url) => (url || "").includes(contains);
   }
   return null;
+}
+
+/**
+ * True only when the operator set optional preload fields (URL contains or regex) in the Session
+ * form. Asset keys alone do not count — without this, manual runs use a full-session CDT timeline
+ * (no trim/rebase) so nothing is “skipped” at the start of the charts.
+ */
+function hasExplicitPreloadBaselineInput(input) {
+  if (!input || typeof input !== "object") return false;
+  const contains =
+    typeof input.assetBaselineUrlContains === "string"
+      ? input.assetBaselineUrlContains.trim()
+      : "";
+  const regex =
+    typeof input.assetBaselineUrlRegex === "string"
+      ? input.assetBaselineUrlRegex.trim()
+      : "";
+  return Boolean(contains || regex);
 }
 
 /**
@@ -2750,55 +2785,95 @@ async function createCaptureSession(
   context.on("requestfinished", onRequestEnd);
   context.on("requestfailed", onRequestEnd);
 
-  const takePerfSample = async () => {
+  /**
+   * **Manual, no preload (`simpleCdtSampling`):** serialized queue + ordinal `timeSec` + ~900ms gaps
+   * between `getMetrics` so TaskDuration deltas are real (fixes flat CPU / empty CDT).
+   *
+   * **Automation or manual + preload URL:** legacy concurrent sampler + **wall-clock** `timeSec`
+   * (matches in-page FPS / rebaseline trim — same timeline as before these fixes).
+   */
+  let perfSampleOrdinal = 0;
+  let perfSampleChain = Promise.resolve();
+  /** Only used when `simpleCdtSampling` — spacing between Chrome `Performance.getMetrics` reads. */
+  let lastGetMetricsWallMs = 0;
+  const runPerfSample = async (scheduledSec) => {
+    let sampleRow = null;
     try {
       const sess = activeSession;
-      /**
-       * During casino automation, `findForegroundPage` can pick the lobby tab while the game
-       * runs in another tab — rebinding CDP to the lobby breaks sampling and can race with
-       * Playwright locators on the game page ("Target page, context or browser has been closed").
-       */
-      const automationHoldGameTab =
-        !!sess?.automationEnabled &&
-        sess?.automation?.phase &&
-        ["game", "betting"].includes(sess.automation.phase);
-      if (sess?.context && !automationHoldGameTab) {
-        const fg = await findForegroundPage(sess.context, sess.page ?? page);
-        if (fg && sess && fg !== sess._foregroundBindPage) {
-          await rebindCaptureSessionToPage(sess, fg);
+      const simpleCdt = sess?.simpleCdtSampling === true;
+      if (!simpleCdt) {
+        /**
+         * During casino automation, `findForegroundPage` can pick the lobby tab while the game
+         * runs in another tab — rebinding CDP to the lobby breaks sampling and can race with
+         * Playwright locators on the game page ("Target page, context or browser has been closed").
+         */
+        const automationHoldGameTab =
+          !!sess?.automationEnabled &&
+          sess?.automation?.phase &&
+          ["game", "betting"].includes(sess.automation.phase);
+        /**
+         * Fixed mobile viewports (portrait / mobile landscape): `document.visibilityState` can still
+         * follow the shell or lobby tab while casino automation holds the game in `session.page`.
+         * Rebinding CDP to `findForegroundPage` then measures the wrong target (flat CPU, dead heap/DOM).
+         * Desktop automation keeps the visibility-based rebind — behavior unchanged there.
+         */
+        const layoutMode = sess?.browserLayout?.mode;
+        const skipForegroundRebindForMobileAutomation =
+          !!sess?.automationEnabled &&
+          (layoutMode === "portrait" || layoutMode === "mobileLandscape");
+        if (
+          sess?.context &&
+          !automationHoldGameTab &&
+          !skipForegroundRebindForMobileAutomation
+        ) {
+          const fg = await findForegroundPage(sess.context, sess.page ?? page);
+          if (fg && sess && fg !== sess._foregroundBindPage) {
+            await rebindCaptureSessionToPage(sess, fg);
+          }
         }
+        const activePageForBaseline = activeSession?.page ?? page;
+        /**
+         * Poll URL for preload baseline (manual: regex/contains/keys). Automation: **keys only**
+         * via `buildAssetKeysBaselineMatcher` — excludes lobby/auth paths so t=0 tracks game URL like manual.
+         */
+        const automationKeysBaselineTest =
+          sess?.automationEnabled &&
+          Array.isArray(sess.assetGameKeys) &&
+          sess.assetGameKeys.length > 0
+            ? buildAssetKeysBaselineMatcher(sess.assetGameKeys)
+            : null;
+        const pollBaselineTest =
+          !sess?.automationEnabled && sess?.effectiveBaselineUrlTest
+            ? sess.effectiveBaselineUrlTest
+            : automationKeysBaselineTest;
+        if (
+          pollBaselineTest &&
+          sess &&
+          !sess._gameSurfaceBaselineCommitted
+        ) {
+          let u = "";
+          try {
+            u = activePageForBaseline.url();
+          } catch {
+            u = "";
+          }
+          if (pollBaselineTest(u)) {
+            await commitAssetBaseline(sess, activePageForBaseline);
+          }
+        }
+        await detectCurtainLifecycle(activeSession, activePageForBaseline);
       }
       const activePage = activeSession?.page ?? page;
-      /**
-       * Poll URL for preload baseline (manual: regex/contains/keys). Automation: **keys only**
-       * via `buildAssetKeysBaselineMatcher` — excludes lobby/auth paths so t=0 tracks game URL like manual.
-       */
-      const automationKeysBaselineTest =
-        sess?.automationEnabled &&
-        Array.isArray(sess.assetGameKeys) &&
-        sess.assetGameKeys.length > 0
-          ? buildAssetKeysBaselineMatcher(sess.assetGameKeys)
-          : null;
-      const pollBaselineTest =
-        !sess?.automationEnabled && sess?.effectiveBaselineUrlTest
-          ? sess.effectiveBaselineUrlTest
-          : automationKeysBaselineTest;
-      if (
-        pollBaselineTest &&
-        sess &&
-        !sess._gameSurfaceBaselineCommitted
-      ) {
-        let u = "";
-        try {
-          u = activePage.url();
-        } catch {
-          u = "";
-        }
-        if (pollBaselineTest(u)) {
-          await commitAssetBaseline(sess, activePage);
+      if (simpleCdt) {
+        const nowPreMetrics = Date.now();
+        if (lastGetMetricsWallMs > 0) {
+          const elapsed = nowPreMetrics - lastGetMetricsWallMs;
+          const minGapMs = 900;
+          if (elapsed < minGapMs) {
+            await new Promise((r) => setTimeout(r, minGapMs - elapsed));
+          }
         }
       }
-      await detectCurtainLifecycle(activeSession, activePage);
       let metrics = null;
       try {
         metrics = await (activeSession?.metricsCdp ?? metricsCdp).send(
@@ -2812,6 +2887,10 @@ async function createCaptureSession(
             "[PerfTrace] Performance.getMetrics failed (using deltas=0, keeping last snapshot):",
             e?.message || e
           );
+        }
+      } finally {
+        if (simpleCdt) {
+          lastGetMetricsWallMs = Date.now();
         }
       }
       const lastTotals = sess?.lastPerfTotals;
@@ -2890,8 +2969,10 @@ async function createCaptureSession(
       } catch {
         activeUrl = "";
       }
-      samples.push({
-        timeSec: Math.max(0, (Date.now() - recordingStartMs) / 1000),
+      sampleRow = {
+        timeSec: simpleCdt
+          ? scheduledSec
+          : Math.max(0, (Date.now() - recordingStartMs) / 1000),
         cpuBusyMs: deltaTask,
         cpuPercent,
         scriptMs: deltaScript,
@@ -2902,23 +2983,58 @@ async function createCaptureSession(
           : undefined,
         nodes: totals.nodes || undefined,
         activePageUrl: activeUrl || undefined,
-      });
+      };
     } catch (e) {
       const s = activeSession;
       if (s && !s._takePerfSampleErrorLogged) {
         s._takePerfSampleErrorLogged = true;
         console.warn(
-          "[PerfTrace] takePerfSample failed (metrics may be empty):",
+          "[PerfTrace] runPerfSample failed (metrics may be empty):",
           e?.message || e
         );
       }
     }
+    const sess = activeSession;
+    const useSimpleCdt = sess?.simpleCdtSampling === true;
+    const wallSecRow = Math.max(0, (Date.now() - recordingStartMs) / 1000);
+    if (!sampleRow) {
+      const lt = sess?.lastPerfTotals;
+      sampleRow = {
+        timeSec: useSimpleCdt ? scheduledSec : wallSecRow,
+        _synthetic: true,
+        cpuBusyMs: 0,
+        cpuPercent: 0,
+        scriptMs: 0,
+        layoutMs: 0,
+        paintMs: 0,
+        jsHeapMb:
+          lt && typeof lt.jsHeapSize === "number"
+            ? lt.jsHeapSize / (1024 * 1024)
+            : undefined,
+        nodes: typeof lt?.nodes === "number" ? lt.nodes : undefined,
+        activePageUrl: undefined,
+      };
+    } else {
+      sampleRow.timeSec = useSimpleCdt ? scheduledSec : wallSecRow;
+    }
+    samples.push(sampleRow);
   };
-  const sampleInterval = setInterval(() => {
-    void takePerfSample();
-  }, 1000);
+
+  const schedulePerfSample = (scheduledSec) => {
+    if (activeSession?.simpleCdtSampling === true) {
+      perfSampleChain = perfSampleChain
+        .then(() => runPerfSample(scheduledSec))
+        .catch((e) =>
+          console.warn("[PerfTrace] perf sample queue:", e?.message || e)
+        );
+    } else {
+      void runPerfSample(scheduledSec);
+    }
+  };
 
   const automationEnabled = !!(automationOpts && automationOpts.enabled);
+  const explicitPreloadBaseline =
+    hasExplicitPreloadBaselineInput(assetBaselineInput);
   activeSession = {
     browser,
     context,
@@ -2928,12 +3044,20 @@ async function createCaptureSession(
     captureSessionId,
     /** When true, sampler/navigation baseline uses asset keys only (not manual regex). */
     automationEnabled,
+    /** Manual only: user set preload baseline URL contains or regex — enables timeline trim. */
+    explicitPreloadBaseline,
+    /**
+     * Manual session with **no** preload URL fields: keep CDT on the original target page CDP session —
+     * skip foreground tab hunt, rebind, URL baseline polling, and curtain detection in the sampler
+     * (navigation hooks + stop-session logic stay unchanged).
+     */
+    simpleCdtSampling:
+      !automationEnabled && explicitPreloadBaseline !== true,
     startedAt: recordingStartMs,
     recordedUrl: safeUrl,
     samples,
     fpsSamples,
     networkRequests,
-    sampleInterval,
     cpuThrottle,
     networkThrottle: networkThrottlePreset,
     traceDetail,
@@ -2959,6 +3083,11 @@ async function createCaptureSession(
     recordVideo: recordVideo !== false,
     videoQuality: videoQuality === "low" ? "low" : "high",
   };
+
+  const sampleInterval = setInterval(() => {
+    schedulePerfSample(perfSampleOrdinal++);
+  }, 1000);
+  activeSession.sampleInterval = sampleInterval;
 
   curtainLiftSessionRef.current = activeSession;
 
@@ -3008,7 +3137,7 @@ async function createCaptureSession(
       );
     }
   }
-  void takePerfSample();
+  schedulePerfSample(perfSampleOrdinal++);
 
   context.on("page", (newPage) => {
     attachPopupTracking(activeSession, newPage);
@@ -3086,12 +3215,17 @@ async function createCaptureSession(
 
 function resolveFfmpegExecutable() {
   const env = process.env.FFMPEG_PATH;
-  if (env && fsSync.existsSync(env)) return env;
+  if (env && fsSync.existsSync(env)) {
+    return normalizeLocalExecutablePathForWin32(env);
+  }
   try {
     const { registry } = require("playwright-core/lib/server");
     const ex = registry.findExecutable("ffmpeg");
     const p = ex?.executablePath?.();
-    if (p && fsSync.existsSync(p)) return p;
+    if (p && fsSync.existsSync(p)) {
+      const normalized = normalizeLocalExecutablePathForWin32(p);
+      return fsSync.existsSync(normalized) ? normalized : p;
+    }
   } catch {
     /* ignore */
   }
@@ -3198,6 +3332,8 @@ async function stopCaptureSession(opts = {}) {
       recordVideo: sessionRecordVideo = true,
       videoQuality: sessionVideoQuality = "high",
       automation: sessionAutomation = null,
+      automationEnabled: sessionAutomationEnabled = false,
+      explicitPreloadBaseline = false,
     } = activeSession;
     activeSession = null;
 
@@ -3241,7 +3377,22 @@ async function stopCaptureSession(opts = {}) {
    */
   let timelineZeroMs = sessionReportTimelineZeroMs ?? startedAt;
   /** Wall ms from session start → URL launch — stripped from charts + video (must match FPS `t0` clock). */
-  const timelineDeltaMs = Math.max(0, timelineZeroMs - startedAt);
+  let timelineDeltaMs = Math.max(0, timelineZeroMs - startedAt);
+
+  /**
+   * Manual session **without** optional preload baseline (contains/regex): do not trim/rebase —
+   * `commitAssetBaseline` may still run for asset keys, but charts + CDT use the full capture window.
+   */
+  const manualFullSessionCdt =
+    !sessionAutomationEnabled && explicitPreloadBaseline !== true;
+  if (manualFullSessionCdt) {
+    timelineDeltaMs = 0;
+    timelineZeroMs = startedAt;
+    console.log(
+      "[PerfTrace] Manual session — no preload baseline URL fields; full-session CDT timeline (no trim)."
+    );
+  }
+
   let samplesForReport = samples;
   /** Session-long FPS (deduped), then rebase like CPU — same `timelineDeltaMs` / formula as CDP rows. */
   let fpsSamplesForReport = fpsSamplesDeduped;
@@ -3265,6 +3416,28 @@ async function stopCaptureSession(opts = {}) {
       "[PerfTrace] Charts + video aligned to baseline at +%ss from session start",
       (timelineDeltaMs / 1000).toFixed(2)
     );
+  }
+
+  /**
+   * Late baseline wall clock (at/near session end) makes `rebaseSampleRows` drop every sample
+   * (1 Hz rows never reach `timeSec >= delta`). Recover full-session series — same data as
+   * “no baseline” without touching traceParser FPS merge logic.
+   */
+  if (
+    timelineDeltaMs > 0 &&
+    Array.isArray(samples) &&
+    samples.length > 0 &&
+    samplesForReport.length === 0
+  ) {
+    console.warn(
+      "[PerfTrace] Baseline trim removed all CDP samples — using full session (no trim)."
+    );
+    timelineDeltaMs = 0;
+    timelineZeroMs = startedAt;
+    samplesForReport = samples;
+    fpsSamplesForReport = fpsSamplesDeduped;
+    networkRequestsForReport = filteredNetworkRequestsForAssets;
+    animForReport = collectedAnimations;
   }
 
   let cdpTraceText = "";
@@ -3357,6 +3530,9 @@ async function stopCaptureSession(opts = {}) {
     );
   }
 
+  /** Same key as `activeSession.simpleCdtSampling` — CPU/heap/DOM chart lines only (CDT). */
+  const simpleCdtSamplingForReport = manualFullSessionCdt;
+
   let report;
   try {
     report = await parseTraceToReport(
@@ -3371,6 +3547,15 @@ async function stopCaptureSession(opts = {}) {
         clientCollector,
         forceSampleSeries: timelineDeltaMs > 0,
         sessionRecordingStartedAt: startedAt,
+        simpleCdtSampling: simpleCdtSamplingForReport,
+        /** Align trace DrawFrame merge with rebased client FPS when lobby→game trim applies. */
+        timelineBaselineTrimSec:
+          timelineDeltaMs > 0 ? timelineDeltaMs / 1000 : 0,
+        /** FPS X-axis matches CPU for trimmed sessions; densify parser output to one point per second. */
+        alignedChartDurationSec:
+          timelineDeltaMs > 0
+            ? Math.max(0, stopRequestedAt - timelineZeroMs) / 1000
+            : undefined,
       }
     );
   } catch (err) {

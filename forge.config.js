@@ -6,6 +6,39 @@ const path = require("path");
 const fs = require("fs");
 const { execSync } = require("child_process");
 
+/**
+ * Windows packages: disable ASAR so paths under resources/app are real NT paths. Preload,
+ * window icons, and other native loaders do not work with virtual ...\\app.asar\\... paths
+ * ("Windows cannot access the specified device, path, or file").
+ * PERFTRACE_WIN_NO_ASAR=1 forces this if argv detection misses your CI.
+ */
+function forgeArgvTargetsWin32() {
+  if (process.env.PERFTRACE_WIN_NO_ASAR === "1") return true;
+  const platforms = new Set();
+  for (let i = 0; i < process.argv.length; i++) {
+    const a = process.argv[i];
+    if (a === "--platform" || a === "-p") {
+      const v = process.argv[i + 1];
+      if (v) v.split(",").forEach((p) => platforms.add(p.trim()));
+    } else {
+      const m = /^--platform=(.+)$/.exec(a);
+      if (m) m[1].split(",").forEach((p) => platforms.add(p.trim()));
+    }
+  }
+  if (platforms.has("win32")) return true;
+  if (process.platform === "win32") {
+    const hasPlatformFlag = process.argv.some(
+      (a) =>
+        a === "--platform" ||
+        a === "-p" ||
+        a.startsWith("--platform=")
+    );
+    if (!hasPlatformFlag) return true;
+  }
+  return false;
+}
+const packageWindowsWithoutAsar = forgeArgvTargetsWin32();
+
 // Optional: set APPLE_ID, APPLE_TEAM_ID, APPLE_PASSWORD for signed + notarized macOS builds.
 // See docs/INSTALL-MAC.md for details.
 const hasAppleSigning =
@@ -19,8 +52,14 @@ module.exports = {
     executableName: "PerfTrace",
     /** Basename only: resolves app-icon.icns / .ico / .png next to this path */
     icon: path.join(__dirname, "assets", "app-icon"),
-    /** Unpack static UI so Express sendFile/static paths resolve reliably on Windows (asar quirks). */
-    asar: { unpack: "**/client/dist/**" },
+    /**
+     * Windows: no app.asar (real folder). Other platforms: ASAR + unpack for UI/assets/preload.
+     */
+    asar: packageWindowsWithoutAsar
+      ? false
+      : {
+          unpack: "{**/client/dist/**,**/assets/**,**/preload.js}",
+        },
     ...(hasAppleSigning
       ? {
           osxSign: {},

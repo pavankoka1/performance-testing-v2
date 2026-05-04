@@ -89,8 +89,8 @@ app.use(cors());
 app.use(express.json());
 
 /**
- * Packaged app: Vite build may live in `app.asar.unpacked/client/dist` (see forge asar unpack).
- * Prefer that path on disk so Windows does not hit odd asar read/sendFile issues.
+ * Packaged app: client/dist via app.asar.unpacked, or path.join(cwd, "client", "dist") when cwd
+ * is the flat app root (Windows asar:false), else path.join from this file.
  */
 function resolveClientDist() {
   const fromServer = path.join(__dirname, "../client/dist");
@@ -104,6 +104,21 @@ function resolveClientDist() {
         "dist"
       );
       if (fs.existsSync(path.join(unpacked, "index.html"))) return unpacked;
+      try {
+        const ap = electronApp.getAppPath();
+        if (
+          ap &&
+          !ap.endsWith(".asar") &&
+          !ap.toLowerCase().includes(`${path.sep}app.asar${path.sep}`)
+        ) {
+          const flat = path.join(ap, "client", "dist");
+          if (fs.existsSync(path.join(flat, "index.html"))) {
+            return path.join(process.cwd(), "client", "dist");
+          }
+        }
+      } catch {
+        /* ignore */
+      }
     }
   } catch {
     /* not running under Electron (e.g. node server/index.js) */
@@ -322,7 +337,7 @@ app.get("/api/video/download", async (req, res) => {
 
 // SPA fallback (production only)
 app.get("*", (req, res, next) => {
-  const indexHtml = path.resolve(clientDist, "index.html");
+  const indexHtml = path.join(clientDist, "index.html");
   if (fs.existsSync(indexHtml)) {
     res.sendFile(indexHtml);
   } else {
